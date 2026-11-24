@@ -39,9 +39,14 @@ on:
         description: 'Upload the merged archive to allactive-tiles-ssd (false = keep it as a workflow artifact)'
         type: boolean
         default: false
+      reuse_run:
+        description: 'Run id whose block archives (part-*, 7 days) the merge takes for every block not built in this run; empty = none'
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: map-tiles
@@ -253,6 +258,22 @@ jobs:
           mkdir -p "$HOME/bin" && tar -xzf /tmp/pmtiles.tar.gz -C "$HOME/bin" pmtiles
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
+      - name: Check reuse_run
+        if: inputs.reuse_run != ''
+        env:
+          REUSE_RUN: ${{ inputs.reuse_run }}
+        run: '[[ "$REUSE_RUN" =~ ^[0-9]+$ ]] || { echo "::error::reuse_run must be a run id"; exit 1; }'
+
+      # Blocks of an earlier run first; the blocks built in this run overwrite theirs.
+      - uses: actions/download-artifact@v4
+        if: inputs.reuse_run != ''
+        with:
+          pattern: part-*
+          path: /mnt/aa-tiles/parts
+          merge-multiple: true
+          run-id: ${{ inputs.reuse_run }}
+          github-token: ${{ github.token }}
+
       - uses: actions/download-artifact@v4
         with:
           pattern: part-*
@@ -265,6 +286,12 @@ jobs:
           TMPDIR: /mnt/aa-tiles/tmp
         run: |
           ls -lh /mnt/aa-tiles/parts
+          if [[ "${{ inputs.blocks }}" == "all" || -n "${{ inputs.reuse_run }}" ]]; then
+            missing=$(python3 -c "import json, os; print(' '.join(b['block'] for b in json.load(open('blocks.json')) if not os.path.exists('/mnt/aa-tiles/parts/' + b['block'] + '.pmtiles')))")
+            if [[ -n "$missing" ]]; then echo "::error::block archives missing: $missing"; exit 1; fi
+          fi
+          # The places of every block in the merge, for the check below.
+          python3 -c "import json, os; print(';'.join(b['places'] for b in json.load(open('blocks.json')) if os.path.exists('/mnt/aa-tiles/parts/' + b['block'] + '.pmtiles')))" > /mnt/aa-tiles/places.txt
           ( while sleep 300; do echo "--- $(date -u +%H:%M) $(free -m | awk '/Mem:/{print "mem used "$3"/"$2" MB"}')"; df -h / | tail -n +2; done ) &
           monitor=$!
           python3 merge-archives.py "$ARCHIVE" /mnt/aa-tiles/parts/*.pmtiles
@@ -273,12 +300,9 @@ jobs:
           ls -lh "$ARCHIVE"
 
       - name: Verify archive
-        env:
-          MATRIX: ${{ needs.prepare.outputs.matrix }}
         run: |
           pmtiles show "$ARCHIVE"
-          places=$(python3 -c "import json, os; print(';'.join(b['places'] for b in json.loads(os.environ['MATRIX'])['include']))")
-          bash verify-archive.sh "$ARCHIVE" "$places"
+          bash verify-archive.sh "$ARCHIVE" "$(cat /mnt/aa-tiles/places.txt)"
 
       - name: Keep merged archive
         if: inputs.upload == false
@@ -309,7 +333,8 @@ jobs:
         run: |
           {
             echo "## Basemap archive"
-            echo "- Blocks: \`${{ inputs.blocks }}\`"
+            echo "- Blocks: \`${{ inputs.blocks }}\`, reused from run: \`${{ inputs.reuse_run }}\`"
+            [[ -f /mnt/aa-tiles/places.txt ]] && echo "- Checked places: $(tr ';' '\n' < /mnt/aa-tiles/places.txt | wc -l)"
             [[ -f "$ARCHIVE" ]] && echo "- Size: $(du -h "$ARCHIVE" | cut -f1)"
             if [[ "$UPLOAD" == "true" ]]; then
               echo "- Uploaded to \`$ZONE/$ARCHIVE_KEY\` (not live yet)"

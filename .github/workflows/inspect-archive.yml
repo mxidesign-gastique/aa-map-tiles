@@ -10,6 +10,10 @@ on:
         description: 'Run id of the Map Tiles run'
         type: string
         required: true
+      parts_run:
+        description: 'Run id that kept the part-* artifacts, if not run_id (empty = run_id)'
+        type: string
+        default: ''
       points:
         description: 'lon lat;lon lat;... along block borders'
         type: string
@@ -41,12 +45,23 @@ jobs:
           merge-multiple: true
           run-id: ${{ inputs.run_id }}
           github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        if: inputs.parts_run != ''
+        with:
+          pattern: 'part-*'
+          path: /mnt/aa
+          merge-multiple: true
+          run-id: ${{ inputs.parts_run }}
+          github-token: ${{ github.token }}
       - name: Inspect seams
         env:
           POINTS: ${{ inputs.points }}
           ZOOMS: ${{ inputs.zooms }}
         run: |
           ls -lh /mnt/aa
-          python3 inspect-tiles.py "$POINTS" "$ZOOMS" /mnt/aa/europe.pmtiles /mnt/aa/de.pmtiles /mnt/aa/fr.pmtiles \
-            /mnt/aa/alpen-adria.pmtiles /mnt/aa/ost.pmtiles /mnt/aa/nordwest.pmtiles | tee /tmp/seams.txt
+          files=()
+          for b in europe de fr alpen-adria ost nordwest; do
+            [[ -f /mnt/aa/$b.pmtiles ]] && files+=("/mnt/aa/$b.pmtiles")
+          done
+          python3 inspect-tiles.py "$POINTS" "$ZOOMS" "${files[@]}" | tee /tmp/seams.txt
           { echo '```'; cat /tmp/seams.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

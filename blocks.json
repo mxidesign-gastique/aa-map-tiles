@@ -1,0 +1,56 @@
+[
+  {
+    "block": "de",
+    "regions": "europe/germany",
+    "bounds": "5.8,47.2,15.1,55.2",
+    "places": "Munich 11.58 48.14;Hamburg 9.99 53.55;Berlin 13.40 52.52;Cologne 6.96 50.94"
+  },
+  {
+    "block": "fr",
+    "regions": "europe/france europe/monaco europe/andorra",
+    "bounds": "-5.4,41.3,9.6,51.2",
+    "places": "Paris 2.35 48.86;Lyon 4.84 45.76;Marseille 5.37 43.30;Bordeaux -0.58 44.84;Strasbourg 7.75 48.58;Ajaccio 8.74 41.92;Andorra 1.52 42.51"
+  },
+  {
+    "block": "alpen-adria",
+    "regions": "europe/italy europe/austria europe/switzerland europe/liechtenstein europe/slovenia europe/croatia europe/bosnia-herzegovina europe/montenegro europe/malta",
+    "bounds": "5.9,35.4,20.4,49.1",
+    "places": "Vienna 16.37 48.21;Innsbruck 11.40 47.27;Zurich 8.54 47.37;Geneva 6.14 46.20;Vaduz 9.52 47.14;Bolzano 11.35 46.50;Rome 12.50 41.90;Palermo 13.36 38.12;Ljubljana 14.51 46.06;Zagreb 15.98 45.81;Split 16.44 43.51;Sarajevo 18.41 43.86;Podgorica 19.26 42.44;Valletta 14.51 35.90"
+  },
+  {
+    "block": "ost",
+    "regions": "europe/poland europe/czech-republic europe/slovakia europe/hungary europe/lithuania europe/latvia europe/estonia russia/kaliningrad",
+    "bounds": "12.0,45.7,28.3,59.8",
+    "places": "Prague 14.42 50.08;Warsaw 21.01 52.23;Bratislava 17.11 48.15;Budapest 19.04 47.50;Vilnius 25.28 54.69;Riga 24.11 56.95;Tallinn 24.75 59.44;Kaliningrad 20.51 54.71"
+  },
+  {
+    "block": "nordwest",
+    "regions": "europe/netherlands europe/belgium europe/luxembourg europe/denmark europe/britain-and-ireland europe/guernsey-jersey europe/faroe-islands",
+    "bounds": "-10.8,49.1,15.3,62.5",
+    "places": "Amsterdam 4.90 52.37;Brussels 4.35 50.85;Luxembourg 6.13 49.61;Copenhagen 12.57 55.68;London -0.13 51.51;Edinburgh -3.19 55.95;Dublin -6.26 53.35;Torshavn -6.77 62.01"
+  },
+  {
+    "block": "nord",
+    "regions": "europe/norway europe/sweden europe/finland",
+    "bounds": "4.4,54.9,31.7,71.3",
+    "places": "Oslo 10.75 59.91;Bergen 5.32 60.39;Stockholm 18.07 59.33;Helsinki 24.94 60.17;Tromso 18.96 69.65"
+  },
+  {
+    "block": "island",
+    "regions": "europe/iceland",
+    "bounds": "-24.6,63.2,-13.4,66.7",
+    "places": "Reykjavik -21.94 64.15"
+  },
+  {
+    "block": "iberia",
+    "regions": "europe/spain europe/portugal",
+    "bounds": "-18.3,27.5,4.4,44.0",
+    "places": "Madrid -3.70 40.42;Barcelona 2.17 41.39;Lisbon -9.14 38.72;Seville -5.98 37.39;Palma 2.65 39.57;Las-Palmas -15.43 28.12;Funchal -16.91 32.65"
+  },
+  {
+    "block": "suedost",
+    "regions": "europe/greece europe/romania europe/serbia europe/bulgaria europe/albania europe/kosovo europe/macedonia europe/moldova europe/ukraine europe/belarus europe/cyprus europe/turkey europe/georgia",
+    "bounds": "19.0,34.5,46.8,56.2",
+    "places": "Athens 23.73 37.98;Bucharest 26.10 44.43;Belgrade 20.46 44.82;Sofia 23.32 42.70;Tirana 19.82 41.33;Skopje 21.43 42.00;Pristina 21.17 42.66;Kyiv 30.52 50.45;Minsk 27.56 53.90;Chisinau 28.86 47.01;Nicosia 33.38 35.17;Istanbul 28.98 41.01;Tbilisi 44.79 41.72"
+  }
+]

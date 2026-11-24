@@ -1,0 +1,83 @@
+# Copies the merged archive of a finished Map Tiles run (artifact europe-archive, kept 7 days)
+# to the Bunny storage zone under a new key, without building again. The live map keeps reading
+# its archive until ARCHIVE_PATH of the edge script allactive-tiles is switched.
+name: Publish Archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Run id of the Map Tiles run that kept europe-archive'
+        type: string
+        required: true
+      archive_key:
+        description: 'Target key in the zone, tiles/europe-<suffix>.pmtiles'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  ZONE: allactive-tiles-ssd
+  S3_ENDPOINT: https://de-s3.storage.bunnycdn.com
+  LIVE_KEY: tiles/europe.pmtiles
+  AWS_DEFAULT_REGION: de
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ARCHIVE_KEY: ${{ inputs.archive_key }}
+      RUN_ID: ${{ inputs.run_id }}
+    steps:
+      - name: Check inputs
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::run_id must be a number"; exit 1; }
+          if [[ ! "$ARCHIVE_KEY" =~ ^tiles/europe-[a-z0-9-]+\.pmtiles$ ]] || [[ "$ARCHIVE_KEY" == "$LIVE_KEY" ]]; then
+            echo "::error::archive_key must look like tiles/europe-<suffix>.pmtiles and never be $LIVE_KEY"
+            exit 1
+          fi
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /usr/share/swift
+          sudo mkdir -p /mnt/aa-tiles && sudo chown "$USER" /mnt/aa-tiles
+          df -h / /mnt
+
+      - name: Check target
+        env:
+          AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+        run: |
+          if aws s3api head-object --bucket "$ZONE" --key "$ARCHIVE_KEY" --endpoint-url "$S3_ENDPOINT" >/dev/null 2>&1; then
+            echo "::error::$ARCHIVE_KEY already exists in $ZONE; choose another archive_key"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: europe-archive
+          path: /mnt/aa-tiles
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Upload to Bunny storage
+        env:
+          AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+          ARCHIVE: /mnt/aa-tiles/europe.pmtiles
+        run: |
+          ls -lh "$ARCHIVE"
+          aws configure set default.s3.multipart_chunksize 64MB
+          aws s3 cp "$ARCHIVE" "s3://$ZONE/$ARCHIVE_KEY" --endpoint-url "$S3_ENDPOINT" \
+            --content-type application/vnd.pmtiles --no-progress
+          remote=$(aws s3api head-object --bucket "$ZONE" --key "$ARCHIVE_KEY" --endpoint-url "$S3_ENDPOINT" --query ContentLength --output text)
+          local_size=$(stat -c %s "$ARCHIVE")
+          echo "local $local_size, remote $remote"
+          [[ "$remote" == "$local_size" ]]
+          {
+            echo "## Published"
+            echo "- \`$ZONE/$ARCHIVE_KEY\` from run $RUN_ID (not live yet)"
+            echo ""
+            echo "Live schalten: Edge Script \`allactive-tiles\` → Umgebung \`ARCHIVE_PATH=$ARCHIVE_KEY\`, Pull Zone 6697032 purgen."
+          } >> "$GITHUB_STEP_SUMMARY"

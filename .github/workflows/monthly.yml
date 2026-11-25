@@ -1,6 +1,8 @@
 # Keeps the basemap and the place list from going stale: once a month the tiles are built
 # from fresh OpenStreetMap extracts and go live through tiles/current.json, and the place list
 # is built from the newest Overture release (places/current.json, read by the backend).
+# The elevation tiles (terrain/current.json) are cut again only when Mapterhorn has published a
+# new planet.pmtiles; it rebuilds rarely.
 name: Monthly refresh
 
 on:
@@ -23,3 +25,4 @@ jobs:
         run: |
           gh workflow run map-tiles.yml --ref main -f blocks=all -f upload=true -f make_live=true
           gh workflow run places.yml --ref main -f upload=true -f full_countries='DE AT CH'
+          gh workflow run terrain.yml --ref main -f dry_run=false -f upload=true -f make_live=true -f only_if_changed=true

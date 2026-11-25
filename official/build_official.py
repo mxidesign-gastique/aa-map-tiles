@@ -3,7 +3,7 @@
 
   python3 official/build_official.py OUT_DIR [--bbox min_lon,min_lat,max_lon,max_lat] [--sources wlv-gzp,provinz-bozen,lfu-bayern]
 
-Writes OUT_DIR/hazard_zone.geojsonl, OUT_DIR/hazard_coverage.geojsonl and OUT_DIR/sources.json
+Writes OUT_DIR/hazard_zone.geojsonl, OUT_DIR/hazard_coverage.geojsonl, OUT_DIR/route.geojsonl and OUT_DIR/sources.json
 (per source: count, updated, licence, attribution). tippecanoe turns the two sequences into the
 layers of the tile set `official` (.github/workflows/official.yml).
 
@@ -30,12 +30,15 @@ from typing import Any, Iterator
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from hazard_zones import map_bz, map_lfu, map_wlv  # noqa: E402
+from routes_bvv import map_bvv  # noqa: E402
 
 AGENT = "all-active-tiles/1.0 (+https://all-active.net)"
 WLV_BASE = "https://gis.lfrz.gv.at/api/geodata/i000901/ogc/features/v1"
 WLV_COLLECTIONS = ["wlv_gzp_sz_la", "wlv_gzp_sz_wb", "wlv_gzp_bvb", "wlv_gzp_rrb", "wlv_gzp_bhb", "wlv_gzp_vhb"]
 BZ_BASE = "https://geoservices1.civis.bz.it/geoserver/p_bz-TerritorialPlans/ows"
 BZ_LAYERS = ["Avalanches", "Hydrology", "Landslides"]
+BVV_ZIP = "https://geodaten.bayern.de/odd/m/2/basisdlm/plus/by_basisdlm_plus.zip"
+BVV_LAYER = "L_53901_Freizeitwegachse_BY"
 LFU_ZIP = "https://www.lfu.bayern.de/gdi/dls/daten/georisiken/gefahrenhinweiskarten_epsg4258_shp.zip"
 
 SOURCES = {
@@ -48,6 +51,11 @@ SOURCES = {
         "name": "Gefahrenzonenpläne der Gemeinden, Autonome Provinz Bozen",
         "licence": "CC0 1.0",
         "attribution": "Gefahrenzonenpläne: Autonome Provinz Bozen - Südtirol, in eigene Darstellung umgewandelt",
+    },
+    "bvv-freizeitwege": {
+        "name": "Freizeitwege Bayern (ATKIS Basis-DLM plus)",
+        "licence": "CC BY 4.0",
+        "attribution": "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de; in eigene Darstellung umgewandelt",
     },
     "lfu-bayern": {
         "name": "Gefahrenhinweiskarte Bayern (Georisiken)",
@@ -125,6 +133,30 @@ def lfu_layers(work: pathlib.Path, bbox: str | None) -> Iterator[tuple[str, dict
         target.unlink()
 
 
+def download(url: str, target: pathlib.Path) -> pathlib.Path:
+    if not target.exists():
+        request = urllib.request.Request(url, headers={"User-Agent": AGENT})
+        with urllib.request.urlopen(request, timeout=1800) as response, target.open("wb") as out:
+            while chunk := response.read(1 << 20):
+                out.write(chunk)
+    return target
+
+
+def bvv_features(work: pathlib.Path, bbox: str | None) -> Iterator[dict]:
+    """The leisure trail axes of the Basis-DLM plus (1.75 GiB zip, one GeoPackage inside)."""
+    archive = download(BVV_ZIP, work / "by_basisdlm_plus.zip")
+    target = work / "bvv_trails.geojsonl"
+    command = ["ogr2ogr", "-f", "GeoJSONSeq", str(target), f"/vsizip/{archive}/by_basisdlm_plus.gpkg", BVV_LAYER,
+               "-t_srs", "EPSG:4326", "-lco", "COORDINATE_PRECISION=6", "-explodecollections"]
+    if bbox:
+        command += ["-spat", *bbox.split(","), "-spat_srs", "EPSG:4326"]
+    subprocess.run(command, check=True)
+    with target.open() as lines:
+        for line in lines:
+            yield json.loads(line.lstrip("\x1e"))
+    target.unlink()
+
+
 def points(geometry: dict | None) -> Iterator[tuple[float, float]]:
     if not geometry:
         return
@@ -160,7 +192,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("out")
     parser.add_argument("--bbox")
-    parser.add_argument("--sources", default="wlv-gzp,provinz-bozen,lfu-bayern")
+    parser.add_argument("--sources", default="wlv-gzp,provinz-bozen,lfu-bayern,bvv-freizeitwege")
+    parser.add_argument("--work", help="where big downloads go (default: OUT_DIR/work); outside the repo")
     args = parser.parse_args()
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -169,7 +202,12 @@ def main() -> None:
     updated: dict[str, str] = {}
     by_municipality: dict[tuple[str, str], set] = defaultdict(set)
 
-    with (out / "hazard_zone.geojsonl").open("w") as zones, (out / "hazard_coverage.geojsonl").open("w") as coverage:
+    work_dir = pathlib.Path(args.work) if args.work else out / "work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    unknown_trails = 0
+
+    with (out / "hazard_zone.geojsonl").open("w") as zones, (out / "hazard_coverage.geojsonl").open("w") as coverage, \
+            (out / "route.geojsonl").open("w") as routes:
         def write(zone: dict | None) -> None:
             if not zone or not zone.get("geometry"):
                 return
@@ -195,6 +233,15 @@ def main() -> None:
                     else:
                         write(map_lfu(record, layer, index))
 
+        if "bvv-freizeitwege" in wanted:
+            for feature in bvv_features(work_dir, args.bbox):
+                route = map_bvv(feature)
+                if route is None:
+                    unknown_trails += 1
+                    continue
+                routes.write(json.dumps(route, ensure_ascii=False, separators=(",", ":")) + "\n")
+                counts["bvv-freizeitwege"] += 1
+
         for (source, municipality), coords in by_municipality.items():
             ring = hull(coords)
             if ring:
@@ -206,6 +253,8 @@ def main() -> None:
     meta = {key: {**SOURCES[key], "count": counts[key], "updated": updated.get(key)} for key in sorted(wanted)}
     (out / "sources.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(json.dumps(meta, ensure_ascii=False, indent=2))
+    if counts.get("bvv-freizeitwege") and unknown_trails > counts["bvv-freizeitwege"] / 100:
+        raise SystemExit(f"{unknown_trails} BVV trails with an unknown FW_TYP: check the value list in routes_bvv.py")
     if not any(counts.values()):
         raise SystemExit("no hazard zones written")
 

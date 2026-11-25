@@ -1,7 +1,8 @@
 # Overlay tile set "official" (official data in our schema) for map.all-active.net:
 # official/build_official.py fetches the hazard zones of WLV Austria, the Province of Bolzano and the
-# LfU Bavaria hazard indication map, maps them onto our schema (official/hazard_zones.py) and
-# tippecanoe writes one PMTiles archive with the layers hazard_zone and hazard_coverage.
+# LfU Bavaria hazard indication map and the Bavarian leisure trails (BVV Basis-DLM plus), maps them
+# onto our schema (official/hazard_zones.py, official/routes_bvv.py) and tippecanoe writes one
+# PMTiles archive with the layers hazard_zone, hazard_coverage and route.
 #
 # Schema: README.md, section "official (Amtliche Daten)". Licences differ from the ODbL basemap,
 # hence a separate set; sources.json in the archive folder carries licence and attribution per source.
@@ -14,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       sources:
-        description: 'Comma-separated sources (wlv-gzp, provinz-bozen, lfu-bayern)'
+        description: 'Comma-separated sources (wlv-gzp, provinz-bozen, lfu-bayern, bvv-freizeitwege)'
         type: string
-        default: 'wlv-gzp,provinz-bozen,lfu-bayern'
+        default: 'wlv-gzp,provinz-bozen,lfu-bayern,bvv-freizeitwege'
       bbox:
         description: 'Optional bbox min_lon,min_lat,max_lon,max_lat for a trial (empty = all)'
         type: string
@@ -48,6 +49,7 @@ jobs:
 
       - name: Prepare
         run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup 2>/dev/null || true
           sudo mkdir -p "$WORK" && sudo chown "$USER" "$WORK"
           sudo apt-get update -qq && sudo apt-get install -y -qq gdal-bin tippecanoe
           ogr2ogr --version; tippecanoe --version
@@ -62,7 +64,8 @@ jobs:
         run: |
           set -euo pipefail
           start=$SECONDS
-          args=("$WORK/out" --sources "$SOURCES")
+          # The BVV GeoPackage (1.75 GiB zipped) stays on the runner's /mnt, never in the repo.
+          args=("$WORK/out" --sources "$SOURCES" --work "$WORK/download")
           [[ -n "$BBOX" ]] && args+=(--bbox "$BBOX")
           python3 official/build_official.py "${args[@]}"
           wc -l "$WORK"/out/*.geojsonl
@@ -77,9 +80,10 @@ jobs:
           tippecanoe -o "$WORK/official.pmtiles" --force \
             -z14 --simplification=4 --detect-shared-borders \
             --drop-smallest-as-needed --coalesce-densest-as-needed --extend-zooms-if-still-dropping \
-            --attribution="Gefahrenzonen: WLV/BML, Autonome Provinz Bozen (CC0), LfU Bayern (CC BY 4.0)" \
+            --attribution="Gefahrenzonen: WLV/BML, Autonome Provinz Bozen (CC0), LfU Bayern (CC BY 4.0); Freizeitwege: Bayerische Vermessungsverwaltung – www.geodaten.bayern.de (CC BY 4.0)" \
             -L'{"file":"'"$WORK"'/out/hazard_zone.geojsonl","layer":"hazard_zone"}' \
             -L'{"file":"'"$WORK"'/out/hazard_coverage.geojsonl","layer":"hazard_coverage"}' \
+            -L'{"file":"'"$WORK"'/out/route.geojsonl","layer":"route"}' \
             -Z6
           ls -l "$WORK/official.pmtiles"
           echo "TILE_SECONDS=$((SECONDS - start))" >> "$GITHUB_ENV"

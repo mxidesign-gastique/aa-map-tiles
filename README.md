@@ -71,6 +71,12 @@ Layer `hazard_coverage` (polygons): where a source has data; `source`, `zone_typ
 `municipality`, `approximate` (true = convex hull of the zones of a municipality; LfU ships its
 own overview). Outside coverage the app says it has no official zones, never that it is safe.
 
+Layer `route` (lines, the route schema of the `routes` set, so the same style applies): `type`
+(hiking, cycling, mtb), `network`, `rank` (1-4; tile min zoom rank 1-2 z6, 3 z9, 4 z11), `name`,
+`ref` (empty, the source has none), `route_id` (integer, unique), `source` (`bvv-freizeitwege`),
+`source_id` (FW_ID), `surface` (paved, unpaved, unknown; data for the sheet, never a colour),
+optional `traffic` (heavy, medium, low), `bayernnetz`, `outside_bavaria`.
+
 Sources and licences (also per source in `sources.json`):
 - WLV Austria, hazard zone plans, OGC API Features `gis.lfrz.gv.at/api/geodata/i000901`:
   INSPIRE, no conditions apply. Red/yellow zones = plan, blue and space-relevant areas =
@@ -79,6 +85,9 @@ Sources and licences (also per source in `sources.json`):
   H4/H3 high, H2 medium, H1 low; "examined and not dangerous" is dropped.
 - LfU Bavaria, hazard indication map (Georisiken), shapefile download: CC BY 4.0,
   "Datenquelle: Bayerisches Landesamt für Umwelt, www.lfu.bayern.de". Hints only.
+- BVV Bavaria, leisure trails, object type `L_53901_Freizeitwegachse_BY` of ATKIS Basis-DLM plus
+  (GeoPackage, 1.75 GiB zipped, weekly; downloaded on the runner only): CC BY 4.0,
+  "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de", licence link and change note.
 
 Run: `gh workflow run official.yml -f upload=false` (optional `-f bbox=...` and `-f sources=wlv-gzp,provinz-bozen,lfu-bayern`
 for a trial). Tests: `cd official && python3 -m unittest`.

@@ -11,8 +11,17 @@ on:
         type: string
         default: '2000'
       overture_release:
+        description: 'Overture release; empty = the newest in the bucket'
         type: string
-        default: '2026-09-23.0'
+        default: ''
+      countries:
+        description: 'Countries to build (empty = all of the European basemap)'
+        type: string
+        default: ''
+      full_countries:
+        description: 'Countries taken complete, without the population limit'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -27,9 +36,12 @@ jobs:
         env:
           MIN_POPULATION: ${{ inputs.min_population }}
           OVERTURE_RELEASE: ${{ inputs.overture_release }}
+          PLACE_COUNTRIES_IN: ${{ inputs.countries }}
+          FULL_COUNTRIES: ${{ inputs.full_countries }}
         run: |
           [[ "$MIN_POPULATION" =~ ^[0-9]+$ ]] || { echo "::error::min_population must be a number"; exit 1; }
           python3 -m pip install --user --quiet duckdb==1.4.1
+          if [[ -n "$PLACE_COUNTRIES_IN" ]]; then export PLACE_COUNTRIES="$PLACE_COUNTRIES_IN"; fi
           /usr/bin/time -v -o /tmp/time.txt python3 places/build_places.py /tmp/places.json.gz | tee /tmp/stats.json
           grep -E 'Elapsed|Maximum resident' /tmp/time.txt
           ls -l /tmp/places.json.gz

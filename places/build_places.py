@@ -13,8 +13,10 @@ Boundaries are NOT part of it; `import_overture_divisions.py` adds them when con
 
 The file name keeps "dach" for history; the seed state and revision say which list it is.
 
-OVERTURE_RELEASE must match the release of the stored places, or the ids differ
-(PROD: 2026-09-23.0). Data comes from the official Overture S3 bucket only.
+OVERTURE_RELEASE (default: the newest release in the bucket; Overture keeps only the last
+few) names the release. Overture ids (GERS) are meant to stay stable across releases, but a
+place whose id changed would come twice, so a newer list adds countries, it does not replace
+the stored DACH places (see `merge_places.py`). Data comes from the official Overture S3 bucket.
 """
 
 from __future__ import annotations
@@ -32,14 +34,27 @@ EUROPE = (
     "NO SE FI IS ES PT GI GR RO RS BG AL XK MK MD UA BY CY TR GE"
 )
 COUNTRIES = tuple(os.environ.get("PLACE_COUNTRIES", EUROPE).split())
-FULL_COUNTRIES = tuple(os.environ.get("FULL_COUNTRIES", "DE AT CH").split())
+FULL_COUNTRIES = tuple(os.environ.get("FULL_COUNTRIES", "DE AT CH").split()) or ("--",)
 MIN_POPULATION = int(os.environ.get("MIN_POPULATION", "2000"))
 SUBTYPES = ("locality", "localadmin", "county", "region")
 EXCLUDED_CLASSES = ("hamlet",)  # a hamlet is no municipality; its name is too often an ordinary word
 
 
+def latest_release() -> str:
+    """The newest release in the Overture bucket; Overture keeps only the last few."""
+    import re
+    import urllib.request
+
+    url = "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/?list-type=2&prefix=release/&delimiter=/"
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "all-active-places"}), timeout=30) as response:
+        releases = re.findall(r"<Prefix>release/([^/<]+)/</Prefix>", response.read().decode())
+    if not releases:
+        raise SystemExit("no Overture release found")
+    return sorted(releases)[-1]
+
+
 def main(output: str) -> None:
-    release = os.environ.get("OVERTURE_RELEASE", "2026-09-23.0")
+    release = os.environ.get("OVERTURE_RELEASE") or latest_release()
     base = f"s3://overturemaps-us-west-2/release/{release}/theme=divisions"
     db = duckdb.connect()
     db.execute("INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs; SET s3_region='us-west-2'")

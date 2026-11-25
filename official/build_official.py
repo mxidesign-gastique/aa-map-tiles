@@ -158,12 +158,32 @@ def bvv_features(work: pathlib.Path, bbox: str | None) -> Iterator[dict]:
     target.unlink()
 
 
-def protected_features(source: str, work: pathlib.Path, bbox: str | None) -> Iterator[tuple[dict, dict]]:
-    """The records of one protected-area source, read with ogr2ogr from what `protected_areas.FETCH`
-    names for it: a list of {"input": OGR data source (e.g. "WFS:https://…" or
-    "/vsizip//vsicurl/https://…/x.zip"), "layer": layer or type name, optional "args": extra
-    keyword arguments for the map function (type_name, type_key)}."""
-    for index, entry in enumerate(getattr(protected_areas, "FETCH", {}).get(source, [])):
+def _in_bbox(geometry: dict | None, bbox: str | None) -> bool:
+    """True when the geometry's extent meets the bbox (or there is no bbox)."""
+    if not bbox:
+        return True
+    west, south, east, north = (float(value) for value in bbox.split(","))
+    coords = list(points(geometry))
+    if not coords:
+        return False
+    xs, ys = [x for x, _ in coords], [y for _, y in coords]
+    return min(xs) <= east and max(xs) >= west and min(ys) <= north and max(ys) >= south
+
+
+def protected_features(source: str, work: pathlib.Path, bbox: str | None, found: dict[str, list[dict]]) -> Iterator[tuple[dict, dict]]:
+    """The records of one protected-area source, read as `protected_areas.FETCH` names them: a list of
+    {"format", "input", "layer", "args"}. "ogr" goes through ogr2ogr ("input" an OGR data source such
+    as "WFS:https://…", "layer" the type name); "geoadmin_find" is one geo.admin find call whose
+    `results` are the features (fetched once per URL into `found`, BAFU parks feed two sources).
+    "args" are extra keyword arguments for the map function (type_name, type_key)."""
+    for index, entry in enumerate(protected_areas.FETCH.get(source, [])):
+        if entry.get("format") == "geoadmin_find":
+            if entry["input"] not in found:
+                found[entry["input"]] = get_json(entry["input"]).get("results", [])
+            for feature in found[entry["input"]]:
+                if _in_bbox(feature.get("geometry"), bbox):
+                    yield feature, entry.get("args", {})
+            continue
         target = work / f"protected-{source}-{index}.geojsonl"
         command = ["ogr2ogr", "-f", "GeoJSONSeq", str(target), entry["input"], *([entry["layer"]] if entry.get("layer") else []),
                    "-t_srs", "EPSG:4326", "-lco", "COORDINATE_PRECISION=6", "-lco", "ID_FIELD=gml_id"]
@@ -218,7 +238,7 @@ def main() -> None:
     args = parser.parse_args()
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    wanted = set(args.sources.split(","))
+    wanted = {name for name in args.sources.split(",") if name}
     counts: dict[str, int] = defaultdict(int)
     updated: dict[str, str] = {}
     by_municipality: dict[tuple[str, str], set] = defaultdict(set)
@@ -265,9 +285,10 @@ def main() -> None:
                 counts["bvv-freizeitwege"] += 1
 
         today = date.today().isoformat()
+        found: dict[str, list[dict]] = {}
         for source in [name for name in args.protected.split(",") if name]:
             mapper = protected_areas.SOURCES[source]
-            for record, extra in protected_features(source, work_dir, args.bbox):
+            for record, extra in protected_features(source, work_dir, args.bbox, found):
                 zone = mapper(record, **extra, source_date=today)
                 if not zone:
                     continue

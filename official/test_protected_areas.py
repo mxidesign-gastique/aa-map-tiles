@@ -10,7 +10,7 @@ import protected_areas as pa  # noqa: E402
 
 SHARED_KEYS = [
     "id", "name", "kind", "source", "source_date", "binding", "link", "rule_text",
-    "zone_class", "period_from", "period_to", "period_text", "missing",
+    "zone_class", "period_from", "period_to", "period_text",
 ]
 
 SQUARE = {"type": "Polygon", "coordinates": [[[10, 46], [11, 46], [11, 47], [10, 47], [10, 46]]]}
@@ -27,7 +27,6 @@ def feature(properties, geometry=SQUARE, fid=None):
 class Base(unittest.TestCase):
     def check_shape(self, zone):
         self.assertEqual(list(zone["properties"].keys()), SHARED_KEYS)
-        self.assertEqual(zone["properties"]["missing"], "")
         self.assertEqual(zone["type"], "Feature")
 
 
@@ -72,7 +71,7 @@ class Bafu(Base):
         self.assertEqual(zone["properties"], {
             "id": "bafu-np:37", "name": "Schweizerischer Nationalpark", "kind": "Nationalpark", "source": "bafu-schutzgebiete",
             "source_date": "", "binding": "", "link": "", "rule_text": "", "zone_class": "rules",
-            "period_from": "", "period_to": "", "period_text": "", "missing": "",
+            "period_from": "", "period_to": "", "period_text": "",
         })
         self.assertIsNone(pa.map_bafu_np(rn))
         self.assertIsNone(pa.map_bafu_park(snp))
@@ -104,7 +103,7 @@ class Bafu(Base):
             "id": "bafu-jagdbann:1245", "name": "Combe-Grède", "kind": "Jagdbanngebiet", "source": "bafu-schutzgebiete", "source_date": "",
             "binding": "binding", "link": "",
             "rule_text": "Schneesportarten verboten ausserhalb markierter Pisten\nles chiens doivent être tenus en laisse",
-            "zone_class": "rules", "period_from": "", "period_to": "", "period_text": "", "missing": "",
+            "zone_class": "rules", "period_from": "", "period_to": "", "period_text": "",
         })
 
     def test_jagdbann_same_text_not_twice_and_recommended(self):
@@ -145,7 +144,7 @@ class LfuBayern(Base):
         self.assertEqual(zone["properties"], {
             "id": "lfu-bayern:naturschutzgebiet.516", "name": "Pfahl-Ruine Schwärzenberg", "kind": "Naturschutzgebiet", "source": "lfu-bayern",
             "source_date": "", "binding": "", "link": "", "rule_text": "", "zone_class": "rules",
-            "period_from": "", "period_to": "", "period_text": "", "missing": "",
+            "period_from": "", "period_to": "", "period_text": "",
         })
 
     def test_natura_2000_uses_upper_case_name_and_link(self):
@@ -190,7 +189,7 @@ class Vorarlberg(Base):
         self.assertEqual(zone["properties"], {
             "id": "vorarlberg:fc2a4f8e", "name": "Benger-Park", "kind": "Örtliches Schutzgebiet", "source": "land-vorarlberg", "source_date": "",
             "binding": "", "link": "https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=LrVbg", "rule_text": "", "zone_class": "protected",
-            "period_from": "", "period_to": "", "period_text": "", "missing": "",
+            "period_from": "", "period_to": "", "period_text": "",
         })
 
     def test_drops_without_uuid_or_polygon(self):
@@ -210,7 +209,7 @@ class Bozen(Base):
         self.assertEqual(zone["properties"], {
             "id": "bozen:parks:122460183", "name": "Stilfserjoch", "kind": "Nationalpark", "source": "provinz-bozen", "source_date": "",
             "binding": "", "link": "https://www.nationalpark-stelvio.it/x.pdf", "rule_text": "", "zone_class": "rules",
-            "period_from": "", "period_to": "", "period_text": "", "missing": "",
+            "period_from": "", "period_to": "", "period_text": "",
         })
         nature = feature({"OBJECTID": 2, "BEZ_D": "Naturpark", "NSO_DESC_DE": "Drei Zinnen"}, fid="LandscapePlan-NationalAndNaturalParks.2")
         self.assertEqual(pa.map_bozen(nature)["properties"]["zone_class"], "protected")

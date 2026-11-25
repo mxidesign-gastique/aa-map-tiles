@@ -218,7 +218,6 @@ def _zone(feature, *, id, source, name, kind, zone_class, source_date="", bindin
             "period_from": period[0] if period else "",
             "period_to": period[1] if period else "",
             "period_text": period_text,
-            "missing": "",
         },
     }
 
@@ -363,7 +362,8 @@ def _bozen_key(feature, type_key):
         return type_key
     if type_key in BOZEN_TYPES:
         return BOZEN_TYPES[type_key]
-    prefix = (_id_text((feature or {}).get("id")) or "").rsplit(".", 1)[0]
+    gml_id = _id_text(_properties(feature).get("gml_id")) or _id_text((feature or {}).get("id")) or ""
+    prefix = gml_id.rsplit(".", 1)[0].split(":")[-1]
     if prefix in BOZEN_TYPES:
         return BOZEN_TYPES[prefix]
     category = trimmed(_properties(feature).get("BEZ_D"))
@@ -425,4 +425,47 @@ SOURCES = {
     "lfu-bayern": map_lfu_bayern,
     "vorarlberg": map_vorarlberg,
     "bozen": map_bozen,
+}
+
+
+# --- where the data comes from ------------------------------------------------------------------
+#
+# Per source a list of reads. "input" + "layer" go to ogr2ogr (output EPSG:4326, the WFS feature id
+# lands in the properties as gml_id); "args" are the extra arguments of the map function.
+#
+# BAFU is the exception ("format": "geoadmin_find"): the mapping reads the attribute names of the
+# geo.admin API (jb_name, schutzzeit, best_de, kategorie ...). The download files on data.geo.admin.ch
+# carry other column names (ObjNummer, Name, Kategorie ...), so they would need a second mapping.
+# One find call per layer with an empty search text returns every feature (checked 25.11.2026:
+# Jagdbann 43, parks 20; about 1 MB and 1.4 MB). The answer is {"results": [Feature, ...]} with
+# featureId at the top level and the attributes in "properties"; read it with urllib, not ogr2ogr.
+GEOADMIN_FIND = (
+    "https://api3.geo.admin.ch/rest/services/api/MapServer/find?layer={layer}&searchField={field}"
+    "&searchText=&contains=true&returnGeometry=true&geometryFormat=geojson&sr=4326"
+)
+_PARKS = GEOADMIN_FIND.format(layer="ch.bafu.schutzgebiete-paerke_nationaler_bedeutung_perimeter", field="kategorie")
+_LFU = "WFS:https://www.lfu.bayern.de/gdi/wfs/natur/schutzgebiete"
+_BOZEN = "WFS:https://geoservices1.civis.bz.it/geoserver/p_bz-TerritorialPlans/ows"
+
+FETCH = {
+    "bafu-np": [{"format": "geoadmin_find", "input": _PARKS, "layer": "", "args": {}}],
+    "bafu-park": [{"format": "geoadmin_find", "input": _PARKS, "layer": "", "args": {}}],
+    "bafu-jagdbann": [{
+        "format": "geoadmin_find",
+        "input": GEOADMIN_FIND.format(layer="ch.bafu.wrz-jagdbanngebiete_select", field="kanton"),
+        "layer": "", "args": {},
+    }],
+    "lfu-bayern": [
+        {"format": "ogr", "input": _LFU, "layer": f"natur_wfsschutzgebiete:{type_name}", "args": {"type_name": type_name}}
+        for type_name in BAVARIA_TYPES
+    ],
+    "vorarlberg": [{
+        "format": "ogr",
+        "input": "WFS:https://vogis.cnv.at/geoserver/vogis/schutzgebiete_naturschutz/wfs",
+        "layer": "vogis:schutzgebiete_naturschutz", "args": {},
+    }],
+    "bozen": [
+        {"format": "ogr", "input": _BOZEN, "layer": f"p_bz-TerritorialPlans:{type_name}", "args": {"type_key": key}}
+        for type_name, key in BOZEN_TYPES.items()
+    ],
 }

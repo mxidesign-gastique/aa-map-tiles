@@ -1,0 +1,282 @@
+# Elevation tiles for map.all-active.net/terrain: a Europe extract of Mapterhorn's planet.pmtiles
+# (Terrarium-encoded 512 px WebP, z0-z12) -> Bunny storage zone allactive-tiles-ssd.
+#
+# Mapterhorn adds no licence of its own; the tiles carry the licences of their sources (CC BY,
+# Open Government, Licence Ouverte, Copernicus GLO-30, public domain; none with share-alike or
+# non-commercial clauses, https://download.mapterhorn.com/attribution.json). Self-hosting is allowed
+# (https://mapterhorn.com/faq). The map credits the sources via https://mapterhorn.com/attribution.
+#
+# One Europe archive (~60-90 GB) does not fit a runner's disk, so the extract is split:
+#   base.pmtiles          z0-z9 of the whole box
+#   z4-<x>-<y>.pmtiles    z10-z12 below one z4 tile (a few GB each)
+# The edge script picks the part by the tile's z4 parent and sends every tile it lacks (outside
+# Europe, above z12, a part not uploaded) to tiles.mapterhorn.com, so a half upload never breaks
+# the map. Parts go to terrain/<version>/; terrain/current.json names the live version.
+#
+# Mapterhorn rebuilds rarely: with only_if_changed the run stops when planet.pmtiles still has
+# the md5 the live version was cut from.
+name: Terrain Tiles
+
+on:
+  workflow_dispatch:
+    inputs:
+      bbox:
+        description: 'min_lon,min_lat,max_lon,max_lat (default: the basemap box, Azores to Georgia)'
+        type: string
+        default: '-31.6,27.5,46.8,71.3'
+      dry_run:
+        description: 'Only measure: print the size of every part, download nothing'
+        type: boolean
+        default: true
+      upload:
+        description: 'Upload the parts to allactive-tiles-ssd under terrain/<version>/'
+        type: boolean
+        default: false
+      make_live:
+        description: 'After a complete upload, point terrain/current.json at the new version and delete versions older than the previous one'
+        type: boolean
+        default: false
+      only_if_changed:
+        description: 'Stop when planet.pmtiles has the md5 of the live version'
+        type: boolean
+        default: false
+      max_total_gb:
+        description: 'Stop before downloading when the parts together exceed this many GB'
+        type: string
+        default: '100'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terrain-tiles
+  cancel-in-progress: false
+
+env:
+  ZONE: allactive-tiles-ssd
+  S3_ENDPOINT: https://de-s3.storage.bunnycdn.com
+  SOURCE: https://download.mapterhorn.com/planet.pmtiles
+  BASE_MAXZOOM: '9'
+  PARENT_ZOOM: '4'
+  MAX_ZOOM: '12'
+  PMTILES_VERSION: 1.31.2
+  PMTILES_SHA256: 3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      version: ${{ steps.plan.outputs.version }}
+      md5: ${{ steps.plan.outputs.md5 }}
+      skip: ${{ steps.plan.outputs.skip }}
+    steps:
+      - name: Install pmtiles
+        run: |
+          curl -fsSL -o /tmp/pmtiles.tar.gz \
+            "https://github.com/protomaps/go-pmtiles/releases/download/v$PMTILES_VERSION/go-pmtiles_${PMTILES_VERSION}_Linux_x86_64.tar.gz"
+          echo "$PMTILES_SHA256  /tmp/pmtiles.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/bin" && tar -xzf /tmp/pmtiles.tar.gz -C "$HOME/bin" pmtiles
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Plan parts and measure them
+        id: plan
+        env:
+          AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+          BBOX: ${{ inputs.bbox }}
+          ONLY_IF_CHANGED: ${{ inputs.only_if_changed }}
+          MAX_TOTAL_GB: ${{ inputs.max_total_gb }}
+          UPLOAD: ${{ inputs.upload }}
+        run: |
+          set -euo pipefail
+          [[ "$BBOX" =~ ^-?[0-9.]+,-?[0-9.]+,-?[0-9.]+,-?[0-9.]+$ ]] || { echo "::error::bad bbox $BBOX"; exit 1; }
+          md5=$(curl -fsSL https://download.mapterhorn.com/download_urls.json \
+            | python3 -c "import json, sys; print(next(f['md5sum'] for f in json.load(sys.stdin) if f['name'] == 'planet.pmtiles'))")
+          echo "md5=$md5" >> "$GITHUB_OUTPUT"
+          echo "version=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          skip=false
+          if [[ "$ONLY_IF_CHANGED" == "true" ]] && aws s3 cp "s3://$ZONE/terrain/current.json" /tmp/current.json --endpoint-url "$S3_ENDPOINT" --no-progress 2>/dev/null; then
+            live=$(python3 -c "import json; print(json.load(open('/tmp/current.json')).get('source_md5', ''))")
+            if [[ "$live" == "$md5" ]]; then skip=true; echo "planet.pmtiles unchanged ($md5): nothing to do"; fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          # Parts: the base, then every z4 tile whose box meets the bbox, clipped to it.
+          python3 - "$BBOX" "$PARENT_ZOOM" > /tmp/parts.json <<'EOF'
+          import json, math, sys
+          w, s, e, n = map(float, sys.argv[1].split(','))
+          z = int(sys.argv[2]); size = 2 ** z
+          def x_of(lon): return min(size - 1, int((lon + 180) / 360 * size))
+          def y_of(lat):
+              r = math.radians(lat)
+              return min(size - 1, int((1 - math.log(math.tan(r) + 1 / math.cos(r)) / math.pi) / 2 * size))
+          def lon_of(x): return x / size * 360 - 180
+          def lat_of(y): return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / size))))
+          parts = [{"part": "base", "bbox": f"{w},{s},{e},{n}", "minzoom": 0, "maxzoom": "BASE"}]
+          eps = 1e-6  # stay inside the z4 tile so no neighbour's border tiles come along
+          for x in range(x_of(w), x_of(e) + 1):
+              for y in range(y_of(n), y_of(s) + 1):
+                  bw, be = max(w, lon_of(x) + eps), min(e, lon_of(x + 1) - eps)
+                  bs, bn = max(s, lat_of(y + 1) + eps), min(n, lat_of(y) - eps)
+                  if bw < be and bs < bn:
+                      parts.append({"part": f"z{z}-{x}-{y}", "bbox": f"{bw:.6f},{bs:.6f},{be:.6f},{bn:.6f}", "minzoom": "SPLIT", "maxzoom": "MAX"})
+          print(json.dumps(parts))
+          EOF
+          python3 - <<'EOF' > /tmp/parts2.json
+          import json, os
+          parts = json.load(open('/tmp/parts.json'))
+          base, mx = int(os.environ['BASE_MAXZOOM']), int(os.environ['MAX_ZOOM'])
+          for p in parts:
+              p['minzoom'] = base + 1 if p['minzoom'] == 'SPLIT' else p['minzoom']
+              p['maxzoom'] = base if p['maxzoom'] == 'BASE' else mx
+          print(json.dumps(parts))
+          EOF
+          # Measure every part from the directories only (dry run), keep the parts with tiles.
+          total=0; : > /tmp/measured.jsonl
+          echo "| Teil | bbox | Zoom | Größe |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          for row in $(python3 -c "import json; [print(f\"{p['part']}|{p['bbox']}|{p['minzoom']}|{p['maxzoom']}\") for p in json.load(open('/tmp/parts2.json'))]"); do
+            IFS='|' read -r part bbox minz maxz <<< "$row"
+            out=$(pmtiles extract "$SOURCE" /tmp/dry.pmtiles --bbox="$bbox" --minzoom="$minz" --maxzoom="$maxz" --dry-run 2>&1 || true)
+            bytes=$(echo "$out" | python3 -c "
+          import re, sys
+          t = sys.stdin.read()
+          m = re.search(r'archive size of\s*([0-9.]+)\s*([kKMGT]?i?B)', t)
+          u = {'B':1,'kB':1e3,'KB':1e3,'MB':1e6,'GB':1e9,'TB':1e12,'KiB':1024,'MiB':1024**2,'GiB':1024**3,'TiB':1024**4}
+          print(int(float(m.group(1)) * u.get(m.group(2), 1)) if m else -1)")
+            echo "--- $part ($bbox z$minz-$maxz): $bytes bytes"; echo "$out" | tail -n 5
+            if [[ "$bytes" -lt 0 ]]; then echo "::error::could not read the size of $part"; exit 1; fi
+            echo "| $part | $bbox | $minz–$maxz | $(python3 -c "print(f'{$bytes/1e9:.2f} GB')") |" >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$bytes" -gt 1000 ]]; then
+              total=$((total + bytes))
+              python3 -c "import json, sys; print(json.dumps({'part': sys.argv[1], 'bbox': sys.argv[2], 'minzoom': int(sys.argv[3]), 'maxzoom': int(sys.argv[4]), 'bytes': int(sys.argv[5])}))" "$part" "$bbox" "$minz" "$maxz" "$bytes" >> /tmp/measured.jsonl
+            fi
+          done
+          echo "| **Summe** | | | **$(python3 -c "print(f'{$total/1e9:.1f} GB')")** |" >> "$GITHUB_STEP_SUMMARY"
+          matrix=$(python3 -c "import json; print(json.dumps({'include': [json.loads(l) for l in open('/tmp/measured.jsonl')]}))")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          if [[ "$UPLOAD" == "true" ]] && python3 -c "import sys; sys.exit(0 if $total / 1e9 > float('$MAX_TOTAL_GB') else 1)"; then
+            echo "::error::$((total / 1000000000)) GB is more than max_total_gb=$MAX_TOTAL_GB"; exit 1
+          fi
+
+  part:
+    name: part ${{ matrix.part }}
+    needs: plan
+    if: ${{ !inputs.dry_run && needs.plan.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      # Two at a time: Mapterhorn's download server is a sponsored service, not ours.
+      max-parallel: 2
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    env:
+      ARCHIVE: /mnt/aa-terrain/${{ matrix.part }}.pmtiles
+      KEY: terrain/${{ needs.plan.outputs.version }}/${{ matrix.part }}.pmtiles
+    steps:
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/boost 2>/dev/null || true
+          sudo mkdir -p /mnt/aa-terrain && sudo chown "$USER" /mnt/aa-terrain
+          df -h / /mnt
+
+      - name: Install pmtiles
+        run: |
+          curl -fsSL -o /tmp/pmtiles.tar.gz \
+            "https://github.com/protomaps/go-pmtiles/releases/download/v$PMTILES_VERSION/go-pmtiles_${PMTILES_VERSION}_Linux_x86_64.tar.gz"
+          echo "$PMTILES_SHA256  /tmp/pmtiles.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/bin" && tar -xzf /tmp/pmtiles.tar.gz -C "$HOME/bin" pmtiles
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Extract
+        env:
+          BBOX: ${{ matrix.bbox }}
+          MINZ: ${{ matrix.minzoom }}
+          MAXZ: ${{ matrix.maxzoom }}
+        run: |
+          set -euo pipefail
+          pmtiles extract "$SOURCE" "$ARCHIVE" --bbox="$BBOX" --minzoom="$MINZ" --maxzoom="$MAXZ" --download-threads=4
+          pmtiles verify "$ARCHIVE"
+          pmtiles show "$ARCHIVE" | head -n 30
+          ls -l "$ARCHIVE"
+
+      - name: Upload
+        if: ${{ inputs.upload }}
+        env:
+          AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          aws s3 cp "$ARCHIVE" "s3://$ZONE/$KEY" --endpoint-url "$S3_ENDPOINT" --no-progress \
+            --content-type application/vnd.pmtiles
+          local_size=$(stat -c %s "$ARCHIVE")
+          remote=$(aws s3api head-object --bucket "$ZONE" --key "$KEY" --endpoint-url "$S3_ENDPOINT" --query ContentLength --output text)
+          echo "local $local_size, remote $remote"
+          [[ "$local_size" == "$remote" ]] || { echo "::error::size mismatch for $KEY"; exit 1; }
+          echo "- \`$KEY\`: $local_size bytes" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: [plan, part]
+    if: ${{ inputs.upload && inputs.make_live && needs.part.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      MD5: ${{ needs.plan.outputs.md5 }}
+      MATRIX: ${{ needs.plan.outputs.matrix }}
+      BBOX: ${{ inputs.bbox }}
+    steps:
+      - name: Point terrain/current.json at the new version
+        run: |
+          set -euo pipefail
+          previous=""
+          if aws s3 cp "s3://$ZONE/terrain/current.json" /tmp/current.json --endpoint-url "$S3_ENDPOINT" --no-progress 2>/dev/null; then
+            previous=$(python3 -c "import json; print(json.load(open('/tmp/current.json'))['version'])")
+          fi
+          export PREVIOUS="$previous"
+          python3 - > /tmp/next.json <<'EOF'
+          import json, os, datetime
+          parts = json.loads(os.environ['MATRIX'])['include']
+          print(json.dumps({
+              'version': os.environ['VERSION'],
+              'previous': os.environ.get('PREVIOUS') or None,
+              'base_maxzoom': int(os.environ['BASE_MAXZOOM']),
+              'parent_zoom': int(os.environ['PARENT_ZOOM']),
+              'max_zoom': int(os.environ['MAX_ZOOM']),
+              'bbox': [float(v) for v in os.environ['BBOX'].split(',')],
+              'parts': sorted(p['part'] for p in parts),
+              'bytes': sum(p['bytes'] for p in parts),
+              'source': os.environ['SOURCE'],
+              'source_md5': os.environ['MD5'],
+              'built': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
+          }))
+          EOF
+          cat /tmp/next.json
+          aws s3 cp /tmp/next.json "s3://$ZONE/terrain/current.json" --endpoint-url "$S3_ENDPOINT" \
+            --content-type application/json --cache-control no-cache
+          echo "previous=$previous" >> "$GITHUB_ENV"
+
+      - name: Delete versions older than the previous one
+        # Only once the edge serves the new version (x-archive), so an edge script without
+        # pointer support never loses the archive it reads.
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 20); do
+            served=$(curl -fsS -o /dev/null -D - "https://map.all-active.net/terrain/8/136/88.webp?probe=$VERSION-$i" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-archive"{print $2}')
+            [[ "$served" == terrain/$VERSION/* ]] && break
+            served=""; sleep 30
+          done
+          if [[ -z "$served" ]]; then
+            echo "::warning::The edge does not serve terrain/$VERSION yet; old versions stay."
+            exit 0
+          fi
+          for v in $(aws s3 ls "s3://$ZONE/terrain/" --endpoint-url "$S3_ENDPOINT" | awk '/PRE/{print $2}' | tr -d /); do
+            [[ "$v" == "$VERSION" || "$v" == "$previous" ]] && continue
+            [[ "$v" =~ ^[0-9]{8}$ ]] || continue
+            echo "delete terrain/$v/"
+            aws s3 rm "s3://$ZONE/terrain/$v/" --recursive --endpoint-url "$S3_ENDPOINT"
+          done

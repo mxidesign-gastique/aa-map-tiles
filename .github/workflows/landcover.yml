@@ -1,0 +1,205 @@
+# Vegetation for the zoomed-out basemap: ESA WorldCover 2021 (v200, 10 m, 11 classes) as coloured
+# raster tiles, z0-z8, 512 px WebP, one archive per map theme -> storage zone allactive-tiles-ssd.
+#
+# The OpenMapTiles archive has forest and grass only from z7; below it the map was bare. The
+# style draws these tiles up to z8 and fades them out where the vector landcover takes over.
+#
+# Licence: CC BY 4.0 (WorldCover Product User Manual v2.0, section 5.1,
+# s3://esa-worldcover/v200/2021/docs/WorldCover_PUM_V2.0.pdf). Attribution on the map:
+# "© ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by
+# ESA WorldCover consortium".
+#
+# GDAL reads the 3x3 degree COGs straight from the public bucket and only their overviews at the
+# coarse target resolution, so nothing near the 10 m data is downloaded.
+#
+# Parts go to landcover/<version>/<theme>.pmtiles; landcover/current.json names the live version.
+# WorldCover is a fixed product (2021): no monthly run.
+name: Landcover Tiles
+
+on:
+  workflow_dispatch:
+    inputs:
+      bbox:
+        description: 'min_lon,min_lat,max_lon,max_lat (default: the basemap box, Azores to Georgia)'
+        type: string
+        default: '-31.6,27.5,46.8,71.3'
+      max_zoom:
+        description: 'Highest zoom of the 512 px tiles'
+        type: string
+        default: '8'
+      upload:
+        description: 'Upload to allactive-tiles-ssd under landcover/<version>/ (false = workflow artifact only)'
+        type: boolean
+        default: false
+      make_live:
+        description: 'After the upload, point landcover/current.json at the new version'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: landcover-tiles
+  cancel-in-progress: false
+
+env:
+  ZONE: allactive-tiles-ssd
+  S3_ENDPOINT: https://de-s3.storage.bunnycdn.com
+  PMTILES_VERSION: 1.31.2
+  PMTILES_SHA256: 3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f
+  WORK: /mnt/aa-landcover
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Free disk, install GDAL and pmtiles
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup 2>/dev/null || true
+          sudo mkdir -p "$WORK" && sudo chown "$USER" "$WORK"
+          sudo apt-get update -qq && sudo apt-get install -y -qq gdal-bin >/dev/null
+          gdalinfo --version
+          curl -fsSL -o /tmp/pmtiles.tar.gz \
+            "https://github.com/protomaps/go-pmtiles/releases/download/v$PMTILES_VERSION/go-pmtiles_${PMTILES_VERSION}_Linux_x86_64.tar.gz"
+          echo "$PMTILES_SHA256  /tmp/pmtiles.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/bin" && tar -xzf /tmp/pmtiles.tar.gz -C "$HOME/bin" pmtiles
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          df -h / /mnt
+
+      - name: Mosaic of the WorldCover tiles in the box
+        env:
+          BBOX: ${{ inputs.bbox }}
+        run: |
+          set -euo pipefail
+          [[ "$BBOX" =~ ^-?[0-9.]+,-?[0-9.]+,-?[0-9.]+,-?[0-9.]+$ ]] || { echo "::error::bad bbox $BBOX"; exit 1; }
+          curl -fsSL -o "$WORK/grid.geojson" https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/esa_worldcover_grid.geojson
+          python3 - "$BBOX" "$WORK/grid.geojson" > "$WORK/tiles.txt" <<'EOF'
+          import json, sys
+          w, s, e, n = map(float, sys.argv[1].split(','))
+          for f in json.load(open(sys.argv[2]))['features']:
+              xs = [p[0] for ring in f['geometry']['coordinates'] for p in ring]
+              ys = [p[1] for ring in f['geometry']['coordinates'] for p in ring]
+              if min(xs) < e and max(xs) > w and min(ys) < n and max(ys) > s:
+                  name = f['properties']['ll_tile']
+                  print(f"/vsis3/esa-worldcover/v200/2021/map/ESA_WorldCover_10m_2021_v200_{name}_Map.tif")
+          EOF
+          wc -l < "$WORK/tiles.txt"
+          export AWS_NO_SIGN_REQUEST=YES AWS_REGION=eu-central-1 GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR \
+            CPL_VSIL_CURL_ALLOWED_EXTENSIONS=.tif GDAL_HTTP_MAX_RETRY=5 GDAL_HTTP_RETRY_DELAY=3
+          gdalbuildvrt -q -input_file_list "$WORK/tiles.txt" "$WORK/classes.vrt"
+          gdalinfo "$WORK/classes.vrt" | head -n 20
+
+      - name: Classes in Web Mercator at the resolution of the highest zoom
+        env:
+          BBOX: ${{ inputs.bbox }}
+          MAX_ZOOM: ${{ inputs.max_zoom }}
+        run: |
+          set -euo pipefail
+          export AWS_NO_SIGN_REQUEST=YES AWS_REGION=eu-central-1 GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR \
+            CPL_VSIL_CURL_ALLOWED_EXTENSIONS=.tif GDAL_HTTP_MAX_RETRY=5 GDAL_HTTP_RETRY_DELAY=3 GDAL_CACHEMAX=2048
+          read -r res xmin ymin xmax ymax < <(python3 - "$BBOX" "$MAX_ZOOM" <<'EOF'
+          import math, sys
+          w, s, e, n = map(float, sys.argv[1].split(','))
+          z = int(sys.argv[2])
+          R = 6378137.0
+          res = 2 * math.pi * R / (512 * 2 ** z)
+          def x(lon): return math.radians(lon) * R
+          def y(lat): return math.log(math.tan(math.pi / 4 + math.radians(lat) / 2)) * R
+          # Snap to the tile grid so the tiles cut clean.
+          origin = math.pi * R
+          snap = lambda v, f: f((v + origin) / res) * res - origin
+          print(res, snap(x(w), math.floor), snap(y(s), math.floor), snap(x(e), math.ceil), snap(y(n), math.ceil))
+          EOF
+          )
+          echo "res $res m, extent $xmin $ymin $xmax $ymax"
+          # mode keeps the dominant class of every target pixel; overviews do the heavy lifting.
+          time gdalwarp -q -overwrite -t_srs EPSG:3857 -tr "$res" "$res" -te "$xmin" "$ymin" "$xmax" "$ymax" \
+            -r mode -ovr AUTO -wo NUM_THREADS=ALL_CPUS -multi -dstnodata 0 \
+            -co TILED=YES -co COMPRESS=DEFLATE -co BIGTIFF=IF_SAFER \
+            "$WORK/classes.vrt" "$WORK/classes.tif"
+          gdalinfo -hist "$WORK/classes.tif" | grep -A2 -i "buckets" | head -n 5 || true
+
+      - name: Colour per theme, tile, convert
+        env:
+          MAX_ZOOM: ${{ inputs.max_zoom }}
+        run: |
+          set -euo pipefail
+          # WorldCover classes -> basemap palette (backend/src/api/map-tiles/palettes.ts in the main
+          # repository): forest = tree cover, land = shrub, grass, crop, moss; waterway = wetland,
+          # mangrove; snow and ice its own grey. Built-up, bare, water stay transparent.
+          cat > "$WORK/light.txt" <<'EOF'
+          10 184 214 164 255
+          20 221 232 208 255
+          30 221 232 208 255
+          40 221 232 208 255
+          70 255 255 255 255
+          90 150 189 212 255
+          95 150 189 212 255
+          100 221 232 208 255
+          nv 0 0 0 0
+          EOF
+          cat > "$WORK/dark.txt" <<'EOF'
+          10 58 86 54 255
+          20 45 58 42 255
+          30 45 58 42 255
+          40 45 58 42 255
+          70 74 79 86 255
+          90 30 58 92 255
+          95 30 58 92 255
+          100 45 58 42 255
+          nv 0 0 0 0
+          EOF
+          for f in light dark; do sed -i 's/^ *//' "$WORK/$f.txt"; done
+          # Unlisted classes (50 built-up, 60 bare, 80 water) get alpha 0 via the exact-match colour table.
+          for theme in light dark; do
+            sed -i '/^nv/d' "$WORK/$theme.txt"
+            printf '0 0 0 0 0\n50 0 0 0 0\n60 0 0 0 0\n80 0 0 0 0\n' >> "$WORK/$theme.txt"
+            gdaldem color-relief -exact_color_entry -alpha -co TILED=YES -co COMPRESS=DEFLATE -co BIGTIFF=IF_SAFER \
+              "$WORK/classes.tif" "$WORK/$theme.txt" "$WORK/$theme-rgba.tif"
+            gdal_translate -q -of MBTILES -co TILE_FORMAT=WEBP -co QUALITY=80 -co BLOCKSIZE=512 \
+              -co ZOOM_LEVEL_STRATEGY=UPPER -co RESAMPLING=NEAREST \
+              "$WORK/$theme-rgba.tif" "$WORK/$theme.mbtiles"
+            gdaladdo -q -r nearest "$WORK/$theme.mbtiles" 2 4 8 16 32 64 128 256
+            pmtiles convert "$WORK/$theme.mbtiles" "$WORK/$theme.pmtiles"
+            pmtiles verify "$WORK/$theme.pmtiles"
+            pmtiles show "$WORK/$theme.pmtiles" | head -n 20
+            rm -f "$WORK/$theme-rgba.tif" "$WORK/$theme.mbtiles"
+          done
+          ls -l "$WORK"/*.pmtiles
+          { echo "| Archiv | Größe |"; echo "|---|---|"
+            for theme in light dark; do echo "| $theme.pmtiles | $(du -h "$WORK/$theme.pmtiles" | cut -f1) |"; done; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: landcover
+          path: ${{ env.WORK }}/*.pmtiles
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload
+        if: ${{ inputs.upload }}
+        env:
+          AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+          MAKE_LIVE: ${{ inputs.make_live }}
+          MAX_ZOOM: ${{ inputs.max_zoom }}
+        run: |
+          set -euo pipefail
+          version=$(date -u +%Y%m%d)
+          for theme in light dark; do
+            key="landcover/$version/$theme.pmtiles"
+            aws s3 cp "$WORK/$theme.pmtiles" "s3://$ZONE/$key" --endpoint-url "$S3_ENDPOINT" --no-progress \
+              --content-type application/vnd.pmtiles
+            remote=$(aws s3api head-object --bucket "$ZONE" --key "$key" --endpoint-url "$S3_ENDPOINT" --query ContentLength --output text)
+            [[ "$remote" == "$(stat -c %s "$WORK/$theme.pmtiles")" ]] || { echo "::error::size mismatch $key"; exit 1; }
+            echo "- \`$key\`: $remote bytes" >> "$GITHUB_STEP_SUMMARY"
+          done
+          if [[ "$MAKE_LIVE" == "true" ]]; then
+            python3 -c "import json, sys, datetime; print(json.dumps({'version': sys.argv[1], 'themes': ['light', 'dark'], 'max_zoom': int(sys.argv[2]), 'source': 'ESA WorldCover 2021 v200', 'built': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')}))" \
+              "$version" "$MAX_ZOOM" > /tmp/current.json
+            aws s3 cp /tmp/current.json "s3://$ZONE/landcover/current.json" --endpoint-url "$S3_ENDPOINT" \
+              --content-type application/json --cache-control no-cache
+            cat /tmp/current.json
+          fi

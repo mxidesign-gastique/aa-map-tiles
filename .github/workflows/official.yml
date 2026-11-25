@@ -18,8 +18,9 @@
 name: Official Tiles
 
 on:
-  schedule:
-    - cron: '41 2 * * 1'
+  # Weekly run (Mondays 02:41 UTC) is switched on only after the trial run is approved:
+  # schedule:
+  #   - cron: '41 2 * * 1'
   workflow_dispatch:
     inputs:
       sources:

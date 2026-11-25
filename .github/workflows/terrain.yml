@@ -197,7 +197,13 @@ jobs:
           MAXZ: ${{ matrix.maxzoom }}
         run: |
           set -euo pipefail
-          pmtiles extract "$SOURCE" "$ARCHIVE" --bbox="$BBOX" --minzoom="$MINZ" --maxzoom="$MAXZ" --download-threads=4
+          # Mapterhorn's server resets a long download now and then (25.11.2026: 2 of 20 parts): retry.
+          for attempt in 1 2 3 4; do
+            rm -f "$ARCHIVE"
+            if pmtiles extract "$SOURCE" "$ARCHIVE" --bbox="$BBOX" --minzoom="$MINZ" --maxzoom="$MAXZ" --download-threads=4; then break; fi
+            [[ $attempt == 4 ]] && { echo "::error::extract failed 4 times"; exit 1; }
+            echo "::warning::extract attempt $attempt failed, retrying in $((attempt * 60)) s"; sleep $((attempt * 60))
+          done
           pmtiles verify "$ARCHIVE"
           pmtiles show "$ARCHIVE" | head -n 30
           ls -l "$ARCHIVE"

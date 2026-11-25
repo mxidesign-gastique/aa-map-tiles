@@ -1,0 +1,58 @@
+# Checks a merged Europe archive against its block archives: every non-empty tile of a block must
+# be in the merged archive (non-empty). Read only: nothing goes to the storage zone.
+name: Check Merge
+
+on:
+  workflow_dispatch:
+    inputs:
+      merged_run:
+        description: 'Run id with the artifact europe-archive'
+        type: string
+        required: true
+      parts_runs:
+        description: 'Run ids with part-* artifacts, space separated; later runs win'
+        type: string
+        required: true
+      tiles:
+        description: 'z/x/y,z/x/y to print per archive'
+        type: string
+        default: '4/8/4,5/16/9,5/17/9,4/8/5'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/lib/jvm \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost 2>/dev/null || true
+          sudo mkdir -p /mnt/aa/parts && sudo chown -R "$USER" /mnt/aa
+          python3 -m pip install --user --quiet pmtiles==3.4.1
+          df -h / /mnt
+      - name: Download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGED_RUN: ${{ inputs.merged_run }}
+          PARTS_RUNS: ${{ inputs.parts_runs }}
+        run: |
+          set -euo pipefail
+          gh run download "$MERGED_RUN" -n europe-archive -D /mnt/aa
+          for run in $PARTS_RUNS; do
+            for name in $(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts" -q '.artifacts[] | select(.name | startswith("part-")) | .name'); do
+              rm -rf "/mnt/aa/dl"; gh run download "$run" -n "$name" -D /mnt/aa/dl
+              mv /mnt/aa/dl/*.pmtiles /mnt/aa/parts/
+            done
+          done
+          ls -lh /mnt/aa /mnt/aa/parts; df -h / /mnt
+      - name: Compare
+        env:
+          TILES: ${{ inputs.tiles }}
+        run: |
+          python3 check-merge.py /mnt/aa/europe.pmtiles /mnt/aa/parts/*.pmtiles --tiles "$TILES" | tee /tmp/check.txt
+          { echo '```'; cat /tmp/check.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

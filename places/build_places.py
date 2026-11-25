@@ -6,7 +6,8 @@ and parent, so that search and the where-dialog can name places that hold no ent
 (`src/map/projection/dach-places-seed.ts` writes it, idempotently). Germany, Austria and
 Switzerland (FULL_COUNTRIES) come complete; the other countries of the European basemap
 (PLACE_COUNTRIES) only with localities and municipalities of at least MIN_POPULATION
-inhabitants plus their counties and regions, so the list stays small enough for one seed.
+inhabitants (or, where Overture has no population, its cities and towns) plus their counties
+and regions, so the list stays small enough for one seed.
 Boundaries are NOT part of it; `import_overture_divisions.py` adds them when content arrives.
 
   uv run --with duckdb python scripts/build_dach_places.py OUTPUT.json.gz
@@ -70,7 +71,8 @@ def main(output: str) -> None:
               AND a.names.primary IS NOT NULL AND a.names.primary <> ''
               AND coalesce(v.class, '') <> 'hamlet'
               AND (list_contains(?, a.country) OR a.subtype IN ('county', 'region')
-                   OR coalesce(v.population, 0) >= ?)""",
+                   OR coalesce(v.population, 0) >= ?
+                   OR (v.population IS NULL AND v.class IN ('megacity', 'city', 'town')))""",
         [f"{base}/type=division_area/*", f"{base}/type=division/*", list(COUNTRIES), list(FULL_COUNTRIES), MIN_POPULATION],
     )
     # one place per division (a divided area, e.g. islands, appears more than once)

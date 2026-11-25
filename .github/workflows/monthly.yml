@@ -1,0 +1,25 @@
+# Keeps the basemap and the place list from going stale: once a month the tiles are built
+# from fresh OpenStreetMap extracts and go live through tiles/current.json, and the place list
+# is built from the newest Overture release (places/current.json, read by the backend).
+name: Monthly refresh
+
+on:
+  schedule:
+    - cron: '17 1 3 * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start the builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh workflow run map-tiles.yml --ref main -f blocks=all -f upload=true -f make_live=true
+          gh workflow run places.yml --ref main -f upload=true -f full_countries='DE AT CH'

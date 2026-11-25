@@ -9,7 +9,7 @@ on:
       min_population:
         description: 'Smallest locality outside DE/AT/CH'
         type: string
-        default: '2000'
+        default: '1000'
       overture_release:
         description: 'Overture release; empty = the newest in the bucket'
         type: string
@@ -18,6 +18,10 @@ on:
         description: 'Countries to build (empty = all of the European basemap)'
         type: string
         default: ''
+      upload:
+        description: 'Put the list into allactive-tiles-ssd (places/current.json points at it; the backend picks it up)'
+        type: boolean
+        default: false
       full_countries:
         description: 'Countries taken complete, without the population limit'
         type: string
@@ -25,6 +29,11 @@ on:
 
 permissions:
   contents: read
+
+env:
+  ZONE: allactive-tiles-ssd
+  S3_ENDPOINT: https://de-s3.storage.bunnycdn.com
+  AWS_DEFAULT_REGION: de
 
 jobs:
   places:
@@ -61,3 +70,22 @@ jobs:
           name: places
           path: /tmp/places.json.gz
           retention-days: 7
+      - name: Upload to Bunny storage
+        if: inputs.upload
+        env:
+          AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+        run: |
+          release=$(python3 -c "import json; print(json.load(open('/tmp/stats.json'))['release'])")
+          count=$(python3 -c "import json; print(json.load(open('/tmp/stats.json'))['places'])")
+          [[ "$count" -ge 50000 ]] || { echo "::error::only $count places; not published"; exit 1; }
+          sha=$(sha256sum /tmp/places.json.gz | cut -d' ' -f1)
+          key="places/europe-places-$release-${sha:0:12}.json.gz"
+          aws s3 cp /tmp/places.json.gz "s3://$ZONE/$key" --endpoint-url "$S3_ENDPOINT" \
+            --content-type application/gzip --no-progress
+          python3 -c "import json, sys; json.dump({'release': sys.argv[1], 'path': sys.argv[2], 'sha256': sys.argv[3], 'places': int(sys.argv[4]), 'built': sys.argv[5]}, open('/tmp/current.json', 'w'))" \
+            "$release" "/$key" "$sha" "$count" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          aws s3 cp /tmp/current.json "s3://$ZONE/places/current.json" --endpoint-url "$S3_ENDPOINT" \
+            --content-type application/json --cache-control no-cache --no-progress
+          cat /tmp/current.json
+          echo "- Published \`$key\` ($count places), places/current.json points at it" >> "$GITHUB_STEP_SUMMARY"

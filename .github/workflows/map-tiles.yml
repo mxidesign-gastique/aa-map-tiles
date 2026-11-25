@@ -43,6 +43,10 @@ on:
         description: 'Run id whose block archives (part-*, 7 days) the merge takes for every block not built in this run; empty = none'
         type: string
         default: ''
+      make_live:
+        description: 'After the upload, point tiles/current.json at the new archive (the edge script follows it) and delete archives older than the last three'
+        type: boolean
+        default: false
       reuse_run2:
         description: 'Second earlier run id (its part-* win over reuse_run); empty = none'
         type: string
@@ -344,6 +348,48 @@ jobs:
           echo "local $local_size, remote $remote"
           [[ "$remote" == "$local_size" ]]
 
+      # The edge script reads tiles/current.json (cached a few minutes) and falls back to its
+      # ARCHIVE_PATH. A new archive goes live only if it is not much smaller than the live one.
+      - name: Make live
+        if: inputs.upload && inputs.make_live
+        env:
+          AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+        run: |
+          size=$(stat -c %s "$ARCHIVE")
+          previous=""
+          if aws s3 cp "s3://$ZONE/tiles/current.json" /tmp/current.json --endpoint-url "$S3_ENDPOINT" --no-progress 2>/dev/null; then
+            previous=$(python3 -c "import json; print(json.load(open('/tmp/current.json'))['archive'])")
+            previous_size=$(python3 -c "import json; print(json.load(open('/tmp/current.json'))['bytes'])")
+            if (( size * 10 < previous_size * 9 )); then
+              echo "::error::new archive ($size bytes) is more than 10% smaller than the live one ($previous_size); not switched"
+              exit 1
+            fi
+          fi
+          python3 -c "import json, sys; json.dump({'archive': sys.argv[1], 'bytes': int(sys.argv[2]), 'previous': sys.argv[3] or None, 'run': int(sys.argv[4]), 'built': sys.argv[5]}, open('/tmp/next.json', 'w'))" \
+            "$ARCHIVE_KEY" "$size" "$previous" "${{ github.run_id }}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          aws s3 cp /tmp/next.json "s3://$ZONE/tiles/current.json" --endpoint-url "$S3_ENDPOINT" \
+            --content-type application/json --cache-control no-cache --no-progress
+          cat /tmp/next.json
+          # Old archives go only once the edge serves the new one (header x-archive).
+          live=""
+          for _ in $(seq 1 30); do
+            live=$(python3 -c "import urllib.request; r = urllib.request.urlopen(urllib.request.Request('https://map.all-active.net/10/536/358.mvt?live-check=${{ github.run_id }}', headers={'User-Agent': 'aa-map-tiles'}), timeout=30); print(r.headers.get('x-archive', ''))" || true)
+            [[ "$live" == "$ARCHIVE_KEY" ]] && break
+            sleep 60
+          done
+          if [[ "$live" != "$ARCHIVE_KEY" ]]; then
+            echo "::warning::the edge still serves '${live:-unknown}', not $ARCHIVE_KEY; old archives kept"
+            exit 0
+          fi
+          keep=$(aws s3api list-objects-v2 --bucket "$ZONE" --prefix tiles/europe- --endpoint-url "$S3_ENDPOINT" \
+            --query 'sort_by(Contents, &LastModified)[].Key' --output text | tr '\t' '\n' | grep -E '^tiles/europe-[a-z0-9-]+\.pmtiles$')
+          echo "$keep" | head -n -3 | while read -r old; do
+            [[ -z "$old" || "$old" == "$ARCHIVE_KEY" || "$old" == "$previous" ]] && continue
+            echo "deleting $old"
+            aws s3 rm "s3://$ZONE/$old" --endpoint-url "$S3_ENDPOINT"
+          done
+
       - name: Summary
         if: always()
         run: |
@@ -353,9 +399,9 @@ jobs:
             [[ -f /mnt/aa-tiles/places.txt ]] && echo "- Checked places: $(tr ';' '\n' < /mnt/aa-tiles/places.txt | wc -l)"
             [[ -f "$ARCHIVE" ]] && echo "- Size: $(du -h "$ARCHIVE" | cut -f1)"
             if [[ "$UPLOAD" == "true" ]]; then
-              echo "- Uploaded to \`$ZONE/$ARCHIVE_KEY\` (not live yet)"
+              echo "- Uploaded to \`$ZONE/$ARCHIVE_KEY\` (live only with make_live)"
               echo ""
-              echo "Live schalten: Edge Script \`allactive-tiles\` → Umgebung \`ARCHIVE_PATH=$ARCHIVE_KEY\`, Pull Zone 6697032 purgen (docs/karte-kachel-origin.md im Hauptrepo)."
+              echo "Von Hand live schalten: Edge Script \`allactive-tiles\` → Umgebung \`ARCHIVE_PATH=$ARCHIVE_KEY\`, Pull Zone 6697032 purgen (docs/karte-kachel-origin.md im Hauptrepo)."
             else
               echo "- Kept as artifact \`europe-archive\` of run ${{ github.run_id }} (7 days)."
               echo "- Hochladen ohne neuen Bau: Workflow *Publish Archive* mit run_id ${{ github.run_id }}."

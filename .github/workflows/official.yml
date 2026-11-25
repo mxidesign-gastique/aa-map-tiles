@@ -8,10 +8,18 @@
 # hence a separate set; sources.json in the archive folder carries licence and attribution per source.
 #
 # Upload goes to official/<YYYYMMDD>/official.pmtiles, official/<YYYYMMDD>/sources.json and
-# official/current.json. Never touches tiles/ or routes/. Manual dispatch only.
+# official/current.json. Never touches tiles/ or routes/.
+#
+# Stays current on its own: every Monday the whole set is rebuilt from the live services and goes
+# live (the BVV trails change weekly, the LfU map monthly, the Bolzano plans daily, WLV rarely).
+# A run only replaces the live archive when the tests pass, every source answered and no source
+# lost more than a third of its features against the live archive; otherwise it fails, the live
+# archive stays as it was and GitHub mails the failure. Manual runs default to artifact only.
 name: Official Tiles
 
 on:
+  schedule:
+    - cron: '41 2 * * 1'
   workflow_dispatch:
     inputs:
       sources:
@@ -36,6 +44,10 @@ concurrency:
 
 env:
   ZONE: allactive-tiles-ssd
+  # A scheduled run has no inputs: all sources, the whole area, upload.
+  SOURCES: ${{ inputs.sources || 'wlv-gzp,provinz-bozen,lfu-bayern,bvv-freizeitwege' }}
+  BBOX: ${{ inputs.bbox || '' }}
+  UPLOAD: ${{ github.event_name == 'schedule' || inputs.upload }}
   S3_ENDPOINT: https://de-s3.storage.bunnycdn.com
   AWS_DEFAULT_REGION: de
   WORK: /mnt/aa-official
@@ -58,9 +70,6 @@ jobs:
         run: cd official && python3 -m unittest -v
 
       - name: Fetch and map
-        env:
-          SOURCES: ${{ inputs.sources }}
-          BBOX: ${{ inputs.bbox }}
         run: |
           set -euo pipefail
           start=$SECONDS
@@ -93,6 +102,19 @@ jobs:
             echo '```json'; cat "$WORK/out/sources.json"; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Never replace a good archive with a broken one: compare with the live current.json.
+      - name: Compare with the live archive
+        if: ${{ env.UPLOAD == 'true' }}
+        env:
+          AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if ! aws s3 cp "s3://$ZONE/official/current.json" /tmp/live.json --endpoint-url "$S3_ENDPOINT" --no-progress; then
+            echo "no live archive yet"; exit 0
+          fi
+          python3 official/compare_sources.py /tmp/live.json "$WORK/out/sources.json" >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: official
@@ -102,7 +124,7 @@ jobs:
           retention-days: 3
 
       - name: Upload to Bunny storage
-        if: ${{ inputs.upload }}
+        if: ${{ env.UPLOAD == 'true' }}
         env:
           AWS_ACCESS_KEY_ID: allactive-tiles-ssd
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}

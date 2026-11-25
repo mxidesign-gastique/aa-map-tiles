@@ -89,5 +89,12 @@ Sources and licences (also per source in `sources.json`):
   (GeoPackage, 1.75 GiB zipped, weekly; downloaded on the runner only): CC BY 4.0,
   "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de", licence link and change note.
 
-Run: `gh workflow run official.yml -f upload=false` (optional `-f bbox=...` and `-f sources=wlv-gzp,provinz-bozen,lfu-bayern`
+Refresh: every Monday 02:41 UTC the workflow rebuilds the set from the live services and makes it
+live. It only replaces the live archive when the mapping tests pass, every source answered and no
+source lost more than a third of its features against `official/current.json`
+(`official/compare_sources.py`); otherwise the run fails, the live archive stays and GitHub mails
+the failure. `current.json` carries per source `count` and `updated` (the source's own date), so
+the app shows the data date of every zone and trail.
+
+Run by hand: `gh workflow run official.yml -f upload=false` (optional `-f bbox=...` and `-f sources=wlv-gzp,provinz-bozen,lfu-bayern`
 for a trial). Tests: `cd official && python3 -m unittest`.

@@ -1,0 +1,51 @@
+# Builds the place list for search and the where-dialog (the main repo's
+# backend/data/regions/dach-places.json.gz) from the public Overture divisions.
+# Same script as backend/scripts/build_dach_places.py; the result is a workflow artifact only.
+name: Places
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_population:
+        description: 'Smallest locality outside DE/AT/CH'
+        type: string
+        default: '2000'
+      overture_release:
+        type: string
+        default: '2026-09-23.0'
+
+permissions:
+  contents: read
+
+jobs:
+  places:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        env:
+          MIN_POPULATION: ${{ inputs.min_population }}
+          OVERTURE_RELEASE: ${{ inputs.overture_release }}
+        run: |
+          [[ "$MIN_POPULATION" =~ ^[0-9]+$ ]] || { echo "::error::min_population must be a number"; exit 1; }
+          python3 -m pip install --user --quiet duckdb==1.4.1
+          /usr/bin/time -v python3 places/build_places.py /tmp/places.json.gz 2> /tmp/time.txt | tee /tmp/stats.json
+          grep -E 'Elapsed|Maximum resident' /tmp/time.txt
+          ls -l /tmp/places.json.gz
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          s = json.load(open('/tmp/stats.json'))
+          print(f"## Places\n- {s['places']} places, min population {s['minPopulation']}, without parent {s['withoutParent']}\n")
+          by = {}
+          for k, v in s['byClass'].items():
+              c, cl = k.split('/'); by.setdefault(c, {})[cl] = v
+          print('| country | region | county | localadmin | locality |\n|---|---|---|---|---|')
+          for c in sorted(by):
+              d = by[c]; print(f"| {c} | {d.get('region',0)} | {d.get('county',0)} | {d.get('localadmin',0)} | {d.get('locality',0)} |")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: places
+          path: /tmp/places.json.gz
+          retention-days: 7

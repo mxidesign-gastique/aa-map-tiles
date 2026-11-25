@@ -52,5 +52,11 @@
     "regions": "europe/greece europe/romania europe/serbia europe/bulgaria europe/albania europe/kosovo europe/macedonia europe/moldova europe/ukraine europe/belarus europe/cyprus europe/turkey europe/georgia",
     "bounds": "19.0,34.5,46.8,56.2",
     "places": "Athens 23.73 37.98;Bucharest 26.10 44.43;Belgrade 20.46 44.82;Sofia 23.32 42.70;Tirana 19.82 41.33;Skopje 21.43 42.00;Pristina 21.17 42.66;Kyiv 30.52 50.45;Minsk 27.56 53.90;Chisinau 28.86 47.01;Nicosia 33.38 35.17;Istanbul 28.98 41.01;Tbilisi 44.79 41.72"
+  },
+  {
+    "block": "azoren",
+    "regions": "europe/azores",
+    "bounds": "-31.6,36.8,-24.7,39.8",
+    "places": "Ponta-Delgada -25.67 37.74;Angra -27.22 38.66"
   }
 ]

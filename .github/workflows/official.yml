@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       sources:
-        description: 'Comma-separated sources (wlv, bz, lfu)'
+        description: 'Comma-separated sources (wlv, bozen, lfu-bayern)'
         type: string
-        default: 'wlv,bz,lfu'
+        default: 'wlv,bozen,lfu-bayern'
       bbox:
         description: 'Optional bbox min_lon,min_lat,max_lon,max_lat for a trial (empty = all)'
         type: string

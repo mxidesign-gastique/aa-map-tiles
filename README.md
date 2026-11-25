@@ -53,15 +53,21 @@ Python, stdlib only), own workflow (`.github/workflows/official.yml`), own keys
 (`official/<YYYYMMDD>/official.pmtiles`, `official/<YYYYMMDD>/sources.json`,
 `official/current.json`). Separate from the ODbL sets because licences and update cycles differ.
 
-Layer `hazard_zone` (polygons): `hazard` (avalanche, water, mass_movement, unspecified),
-`process` (flowing_avalanche, powder_avalanche, snow_glide, torrent, flood, debris_flow,
-rockfall, landslide, deep_landslide, slope_failure, sinkhole, subsidence, waterlogging),
-`level` (high, medium, low, reserved, hint), `rank` (1-5), `binding` (plan, reserved_area, hint),
-`level_raw` (wording of the level, e.g. H3, Rote Zone), `label` (wording of the source class),
-`plan`, `municipality`, `approved` and `valid_from` (YYYY-MM-DD), `status`, `depth` (Bolzano:
-level of study), `source` (wlv, bz, lfu), `source_id`, `updated`.
+Fields shared by every zone layer (`hazard_zone` now, `protected_area` next; agreed in
+`karte-zonen-schema-gemeinsam.md`, empty string when the source has nothing): `id`
+(`<source>:<id in the source>`, stable, for promoteId), `name`, `kind` (wording of the source
+class), `source` (data source id: `wlv`, `bozen`, `lfu-bayern`), `source_date`, `binding`
+(`binding`/`recommended`, only with proof from the source), `link`, `rule_text`.
 
-Layer `hazard_coverage` (polygons): where a source has data; `source`, `binding`,
+Layer `hazard_zone` (polygons), in addition: `hazard` (avalanche, water, mass_movement,
+unspecified), `level` (high, medium, low, reserved, hint), `label` (wording of the level, e.g.
+H3, Rote Zone), `zone_type` (plan, reserved_area, hint), `rank` (1-5), and when the source has
+them `process` (flowing_avalanche, powder_avalanche, snow_glide, torrent, flood, debris_flow,
+rockfall, landslide, deep_landslide, slope_failure, sinkhole, subsidence, waterlogging), `plan`,
+`municipality`, `approved` (YYYY-MM-DD), `status`, `depth` (Bolzano: level of study).
+Hazard zones are spatial planning, not the avalanche bulletin.
+
+Layer `hazard_coverage` (polygons): where a source has data; `source`, `zone_type`,
 `municipality`, `approximate` (true = convex hull of the zones of a municipality; LfU ships its
 own overview). Outside coverage the app says it has no official zones, never that it is safe.
 
@@ -74,5 +80,5 @@ Sources and licences (also per source in `sources.json`):
 - LfU Bavaria, hazard indication map (Georisiken), shapefile download: CC BY 4.0,
   "Datenquelle: Bayerisches Landesamt für Umwelt, www.lfu.bayern.de". Hints only.
 
-Run: `gh workflow run official.yml -f upload=false` (optional `-f bbox=...` and `-f sources=...`
+Run: `gh workflow run official.yml -f upload=false` (optional `-f bbox=...` and `-f sources=wlv,bozen,lfu-bayern`
 for a trial). Tests: `cd official && python3 -m unittest`.

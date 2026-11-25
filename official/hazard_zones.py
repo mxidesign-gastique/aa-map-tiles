@@ -3,14 +3,21 @@
 One schema for every source, so the app draws, explains and filters all of them alike
 (README.md, section "official (Amtliche Daten)"):
 
+  shared with protected_area (karte-zonen-schema-gemeinsam.md; '' when the source has nothing):
+  id            <source>:<id in the source>, stable (promoteId)
+  name          proper name, '' for hazard zones (they have none)
+  kind          wording of the source class ("Summenzone - Rote Zone Lawine")
+  source        data source id of the register: wlv | bozen | lfu-bayern
+  source_date   data date of the source (YYYY-MM-DD or a year), else '' (build date in current.json)
+  binding       binding | recommended | '' - only with proof from the source, so '' here
+  link, rule_text  '' (no rule text for hazard zones)
+  hazard_zone only:
   hazard        avalanche | water | mass_movement | unspecified
-  process       finer process when the source names one (rockfall, landslide, ...)
   level         high | medium | low | reserved | hint
+  label         wording of the level in the source ("Rote Zone", "H3", "Gefahrenhinweis")
+  zone_type     plan (zone of an approved plan) | reserved_area | hint (indication map)
   rank          1 (high) ... 5 (hint), draw order
-  binding       plan (zone of an approved plan) | reserved_area | hint (hazard indication map)
-  level_raw     wording of the level in the source ("H3", "Rote Zone")
-  label         full wording of the source class
-  municipality, approved (YYYY-MM-DD), valid_from, status, source, source_id, updated
+  process, plan, municipality, approved (YYYY-MM-DD), status, depth  when the source has them
 
 Sources: WLV Austria (OGC API Features), Autonomous Province of Bolzano (WFS, CC0),
 LfU Bavaria (hazard indication map, shapefile, CC BY 4.0). Rows a source marks as
@@ -39,9 +46,14 @@ def _date(value: Any) -> Optional[str]:
     return None
 
 
+SHARED = ("id", "name", "kind", "source", "source_date", "binding", "link", "rule_text")
+
+
 def _zone(geometry: Any, **props: Any) -> Feature:
     props["rank"] = RANK[props["level"]]
-    return {"type": "Feature", "geometry": geometry, "properties": {k: v for k, v in props.items() if v not in (None, "")}}
+    out = {key: ("" if props.get(key) is None else props.get(key)) for key in SHARED}
+    out.update({k: v for k, v in props.items() if k not in SHARED and v not in (None, "")})
+    return {"type": "Feature", "geometry": geometry, "properties": out}
 
 
 # --- WLV Austria -------------------------------------------------------------------------------
@@ -58,7 +70,7 @@ def map_wlv(feature: Feature, collection: str) -> Optional[Feature]:
     p = feature.get("properties") or {}
     label = str(p.get("objektart") or "").strip()
     name = collection.split(":")[-1]
-    hazard, process, level, binding, level_raw = "unspecified", None, None, None, None
+    hazard, process, level, zone_type, level_raw = "unspecified", None, None, None, None
 
     if name in ("wlv_gzp_sz_la", "wlv_gzp_sz_wb"):
         hazard = "avalanche" if name.endswith("_la") else "water"
@@ -67,17 +79,17 @@ def map_wlv(feature: Feature, collection: str) -> Optional[Feature]:
             level, level_raw = "high", "Rote Zone"
         elif "Gelbe Zone" in label:
             level, level_raw = "medium", "Gelbe Zone"
-        binding = "plan"
+        zone_type = "plan"
     elif name == "wlv_gzp_bvb":
-        level, binding, level_raw = "reserved", "reserved_area", "Blauer Vorbehaltsbereich"
+        level, zone_type, level_raw = "reserved", "reserved_area", "Blauer Vorbehaltsbereich"
     elif name == "wlv_gzp_rrb":
-        level, binding, level_raw = "reserved", "reserved_area", "Raumrelevanter Bereich"
+        level, zone_type, level_raw = "reserved", "reserved_area", "Raumrelevanter Bereich"
     elif name == "wlv_gzp_bhb":
-        level, binding, level_raw = "hint", "hint", "Brauner Hinweisbereich"
+        level, zone_type, level_raw = "hint", "hint", "Brauner Hinweisbereich"
         kind = label.split(" - ", 1)[-1].strip().lower()
         hazard, process = WLV_PROCESS.get(kind, ("unspecified", None))
     elif name == "wlv_gzp_vhb":
-        level, binding, level_raw = "hint", "hint", "Violetter Hinweisbereich"
+        level, zone_type, level_raw = "hint", "hint", "Violetter Hinweisbereich"
     if level is None:
         return None
 
@@ -87,17 +99,16 @@ def map_wlv(feature: Feature, collection: str) -> Optional[Feature]:
         hazard=hazard,
         process=process,
         level=level,
-        binding=binding,
-        level_raw=level_raw,
-        label=label,
+        zone_type=zone_type,
+        label=level_raw,
+        kind=label,
         plan=p.get("name des gefahrenzonenplans"),
         municipality=p.get("hauptgemeindename"),
         approved=approved,
-        valid_from=approved,
         status=p.get("status"),
         source="wlv",
-        source_id=str(feature.get("id") or p.get("wlk_id") or ""),
-        updated=_date(p.get("export")),
+        id=f"wlv:{feature.get('id') or p.get('wlk_id') or ''}",
+        source_date=_date(p.get("export")),
     )
 
 
@@ -132,14 +143,14 @@ def map_bz(feature: Feature) -> Optional[Feature]:
         hazard=BZ_HAZARD[prefix],
         process=BZ_PROCESS.get(str(p.get("PROZESS") or "")),
         level=BZ_LEVEL[match.group(1)],
-        binding="plan",
-        level_raw=match.group(1),
-        label=label,
+        zone_type="plan",
+        label=match.group(1),
+        kind=label,
         municipality=p.get("NAME_D"),
         status=status,
         depth=p.get("BEARBEITUNGSTIEFE"),
-        source="bz",
-        source_id=str(p.get("OBJECTID") or feature.get("id") or ""),
+        source="bozen",
+        id=f"bozen:{p.get('OBJECTID') or feature.get('id') or ''}",
     )
 
 
@@ -155,7 +166,7 @@ LFU_PROCESS = [
 ]
 
 
-def map_lfu(record: Feature, layer: str) -> Optional[Feature]:
+def map_lfu(record: Feature, layer: str, index: int = 0) -> Optional[Feature]:
     """One shape record of the hazard indication map (`ghk_*`) -> hazard_zone, or None.
 
     `ghk_uebersicht` is the coverage, not a zone; build_official writes it to hazard_coverage.
@@ -171,10 +182,10 @@ def map_lfu(record: Feature, layer: str) -> Optional[Feature]:
         hazard=hazard,
         process=process,
         level="hint",
-        binding="hint",
-        level_raw="Gefahrenhinweis",
-        label=label,
-        source="lfu",
-        source_id=layer,
-        updated=_date(p.get("STAND")),
+        zone_type="hint",
+        label="Gefahrenhinweis",
+        kind=label,
+        source="lfu-bayern",
+        id=f"lfu-bayern:{layer.removesuffix('_epsg4258')}:{index}",
+        source_date=_date(p.get("STAND")),
     )

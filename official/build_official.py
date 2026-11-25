@@ -44,12 +44,12 @@ SOURCES = {
         "licence": "INSPIRE, keine Nutzungsbedingungen (noConditionsApply)",
         "attribution": "Gefahrenzonenpläne: die.wildbach / BML, in eigene Darstellung umgewandelt",
     },
-    "bz": {
+    "bozen": {
         "name": "Gefahrenzonenpläne der Gemeinden, Autonome Provinz Bozen",
         "licence": "CC0 1.0",
         "attribution": "Gefahrenzonenpläne: Autonome Provinz Bozen - Südtirol, in eigene Darstellung umgewandelt",
     },
-    "lfu": {
+    "lfu-bayern": {
         "name": "Gefahrenhinweiskarte Bayern (Georisiken)",
         "licence": "CC BY 4.0",
         "attribution": "Datenquelle: Bayerisches Landesamt für Umwelt, www.lfu.bayern.de; in eigene Darstellung umgewandelt",
@@ -160,7 +160,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("out")
     parser.add_argument("--bbox")
-    parser.add_argument("--sources", default="wlv,bz,lfu")
+    parser.add_argument("--sources", default="wlv,bozen,lfu-bayern")
     args = parser.parse_args()
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -176,33 +176,33 @@ def main() -> None:
             props = zone["properties"]
             zones.write(json.dumps(zone, ensure_ascii=False, separators=(",", ":")) + "\n")
             counts[props["source"]] += 1
-            if props.get("updated") and props["updated"] > updated.get(props["source"], ""):
-                updated[props["source"]] = props["updated"]
-            if props["source"] in ("wlv", "bz") and props.get("municipality"):
+            if props.get("source_date") and props["source_date"] > updated.get(props["source"], ""):
+                updated[props["source"]] = props["source_date"]
+            if props["source"] in ("wlv", "bozen") and props.get("municipality"):
                 by_municipality[(props["source"], props["municipality"])].update(points(zone["geometry"]))
 
         if "wlv" in wanted:
             for collection, feature in wlv_features(args.bbox):
                 write(map_wlv(feature, collection))
-        if "bz" in wanted:
+        if "bozen" in wanted:
             for feature in bz_features(args.bbox):
                 write(map_bz(feature))
-        if "lfu" in wanted:
+        if "lfu-bayern" in wanted:
             with tempfile.TemporaryDirectory(dir=out) as work:
-                for layer, record in lfu_layers(pathlib.Path(work), args.bbox):
+                for index, (layer, record) in enumerate(lfu_layers(pathlib.Path(work), args.bbox)):
                     if layer.startswith("ghk_uebersicht"):
-                        coverage.write(json.dumps({"type": "Feature", "geometry": record["geometry"], "properties": {"source": "lfu", "binding": "hint"}}) + "\n")
+                        coverage.write(json.dumps({"type": "Feature", "geometry": record["geometry"], "properties": {"source": "lfu-bayern", "zone_type": "hint"}}) + "\n")
                     else:
-                        write(map_lfu(record, layer))
+                        write(map_lfu(record, layer, index))
 
         for (source, municipality), coords in by_municipality.items():
             ring = hull(coords)
             if ring:
-                props = {"source": source, "binding": "plan", "municipality": municipality, "approximate": True}
+                props = {"source": source, "zone_type": "plan", "municipality": municipality, "approximate": True}
                 coverage.write(json.dumps({"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]}, "properties": props}, ensure_ascii=False) + "\n")
 
-    if counts.get("bz"):
-        updated["bz"] = date.today().isoformat()  # the service is updated daily and carries no date per zone
+    if counts.get("bozen"):
+        updated["bozen"] = date.today().isoformat()  # the service is updated daily and carries no date per zone
     meta = {key: {**SOURCES[key], "count": counts[key], "updated": updated.get(key)} for key in sorted(wanted)}
     (out / "sources.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(json.dumps(meta, ensure_ascii=False, indent=2))

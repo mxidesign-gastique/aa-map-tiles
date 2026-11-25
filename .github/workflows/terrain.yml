@@ -93,7 +93,7 @@ jobs:
           set -euo pipefail
           [[ "$BBOX" =~ ^-?[0-9.]+,-?[0-9.]+,-?[0-9.]+,-?[0-9.]+$ ]] || { echo "::error::bad bbox $BBOX"; exit 1; }
           md5=$(curl -fsSL https://download.mapterhorn.com/download_urls.json \
-            | python3 -c "import json, sys; print(next(f['md5sum'] for f in json.load(sys.stdin) if f['name'] == 'planet.pmtiles'))")
+            | python3 -c "import json, sys; d = json.load(sys.stdin); d = d if isinstance(d, list) else next(v for v in d.values() if isinstance(v, list)); print(next(f['md5sum'] for f in d if f['name'] == 'planet.pmtiles'))")
           echo "md5=$md5" >> "$GITHUB_OUTPUT"
           echo "version=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
           skip=false

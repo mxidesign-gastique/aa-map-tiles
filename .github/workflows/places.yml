@@ -30,7 +30,7 @@ jobs:
         run: |
           [[ "$MIN_POPULATION" =~ ^[0-9]+$ ]] || { echo "::error::min_population must be a number"; exit 1; }
           python3 -m pip install --user --quiet duckdb==1.4.1
-          /usr/bin/time -v python3 places/build_places.py /tmp/places.json.gz 2> /tmp/time.txt | tee /tmp/stats.json
+          /usr/bin/time -v -o /tmp/time.txt python3 places/build_places.py /tmp/places.json.gz | tee /tmp/stats.json
           grep -E 'Elapsed|Maximum resident' /tmp/time.txt
           ls -l /tmp/places.json.gz
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"

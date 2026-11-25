@@ -94,6 +94,8 @@ jobs:
             -L'{"file":"'"$WORK"'/out/hazard_zone.geojsonl","layer":"hazard_zone"}' \
             -L'{"file":"'"$WORK"'/out/hazard_coverage.geojsonl","layer":"hazard_coverage"}' \
             -L'{"file":"'"$WORK"'/out/route.geojsonl","layer":"route"}' \
+            -L'{"file":"'"$WORK"'/out/protected_area.geojsonl","layer":"protected_area"}' \
+            -L'{"file":"'"$WORK"'/out/zone_label.geojsonl","layer":"zone_label"}' \
             -Z6
           ls -l "$WORK/official.pmtiles"
           echo "TILE_SECONDS=$((SECONDS - start))" >> "$GITHUB_ENV"

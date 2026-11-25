@@ -31,6 +31,7 @@ from typing import Any, Iterator
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from hazard_zones import map_bz, map_lfu, map_wlv  # noqa: E402
 from routes_bvv import map_bvv  # noqa: E402
+import protected_areas  # noqa: E402
 
 AGENT = "all-active-tiles/1.0 (+https://all-active.net)"
 WLV_BASE = "https://gis.lfrz.gv.at/api/geodata/i000901/ogc/features/v1"
@@ -157,6 +158,24 @@ def bvv_features(work: pathlib.Path, bbox: str | None) -> Iterator[dict]:
     target.unlink()
 
 
+def protected_features(source: str, work: pathlib.Path, bbox: str | None) -> Iterator[tuple[dict, dict]]:
+    """The records of one protected-area source, read with ogr2ogr from what `protected_areas.FETCH`
+    names for it: a list of {"input": OGR data source (e.g. "WFS:https://…" or
+    "/vsizip//vsicurl/https://…/x.zip"), "layer": layer or type name, optional "args": extra
+    keyword arguments for the map function (type_name, type_key)}."""
+    for index, entry in enumerate(getattr(protected_areas, "FETCH", {}).get(source, [])):
+        target = work / f"protected-{source}-{index}.geojsonl"
+        command = ["ogr2ogr", "-f", "GeoJSONSeq", str(target), entry["input"], *([entry["layer"]] if entry.get("layer") else []),
+                   "-t_srs", "EPSG:4326", "-lco", "COORDINATE_PRECISION=6", "-lco", "ID_FIELD=gml_id"]
+        if bbox:
+            command += ["-spat", *bbox.split(","), "-spat_srs", "EPSG:4326"]
+        subprocess.run(command, check=True)
+        with target.open() as lines:
+            for line in lines:
+                yield json.loads(line.lstrip("\x1e")), entry.get("args", {})
+        target.unlink()
+
+
 def points(geometry: dict | None) -> Iterator[tuple[float, float]]:
     if not geometry:
         return
@@ -193,6 +212,8 @@ def main() -> None:
     parser.add_argument("out")
     parser.add_argument("--bbox")
     parser.add_argument("--sources", default="wlv-gzp,provinz-bozen,lfu-bayern,bvv-freizeitwege")
+    parser.add_argument("--protected", default=",".join(protected_areas.SOURCES),
+                        help="protected-area sources of official/protected_areas.py ('' = none)")
     parser.add_argument("--work", help="where big downloads go (default: OUT_DIR/work); outside the repo")
     args = parser.parse_args()
     out = pathlib.Path(args.out)
@@ -207,7 +228,8 @@ def main() -> None:
     unknown_trails = 0
 
     with (out / "hazard_zone.geojsonl").open("w") as zones, (out / "hazard_coverage.geojsonl").open("w") as coverage, \
-            (out / "route.geojsonl").open("w") as routes:
+            (out / "route.geojsonl").open("w") as routes, (out / "protected_area.geojsonl").open("w") as protected, \
+            (out / "zone_label.geojsonl").open("w") as labels:
         def write(zone: dict | None) -> None:
             if not zone or not zone.get("geometry"):
                 return
@@ -242,6 +264,21 @@ def main() -> None:
                 routes.write(json.dumps(route, ensure_ascii=False, separators=(",", ":")) + "\n")
                 counts["bvv-freizeitwege"] += 1
 
+        today = date.today().isoformat()
+        for source in [name for name in args.protected.split(",") if name]:
+            mapper = protected_areas.SOURCES[source]
+            for record, extra in protected_features(source, work_dir, args.bbox):
+                zone = mapper(record, **extra, source_date=today)
+                if not zone:
+                    continue
+                props = zone["properties"]
+                protected.write(json.dumps(zone, ensure_ascii=False, separators=(",", ":")) + "\n")
+                counts[f"protected:{source}"] += 1
+                point = protected_areas.label_point(zone)
+                if point and props.get("name"):
+                    label = {"id": props["id"], "name": props["name"], "zone_class": props.get("zone_class", "")}
+                    labels.write(json.dumps({"type": "Feature", "geometry": {"type": "Point", "coordinates": point}, "properties": label}, ensure_ascii=False) + "\n")
+
         for (source, municipality), coords in by_municipality.items():
             ring = hull(coords)
             if ring:
@@ -251,6 +288,8 @@ def main() -> None:
     if counts.get("provinz-bozen"):
         updated["provinz-bozen"] = date.today().isoformat()  # the service is updated daily and carries no date per zone
     meta = {key: {**SOURCES[key], "count": counts[key], "updated": updated.get(key)} for key in sorted(wanted)}
+    for key in sorted(k for k in counts if k.startswith("protected:")):
+        meta[key] = {"count": counts[key], "updated": date.today().isoformat()}
     (out / "sources.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(json.dumps(meta, ensure_ascii=False, indent=2))
     if counts.get("bvv-freizeitwege") and unknown_trails > counts["bvv-freizeitwege"] / 100:

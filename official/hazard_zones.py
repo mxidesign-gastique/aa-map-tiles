@@ -7,7 +7,7 @@ One schema for every source, so the app draws, explains and filters all of them 
   id            <source>:<id in the source>, stable (promoteId)
   name          proper name, '' for hazard zones (they have none)
   kind          wording of the source class ("Summenzone - Rote Zone Lawine")
-  source        data source id of the register: wlv | bozen | lfu-bayern
+  source        data source id of the register: wlv-gzp | provinz-bozen | lfu-bayern
   source_date   data date of the source (YYYY-MM-DD or a year), else '' (build date in current.json)
   binding       binding | recommended | '' - only with proof from the source, so '' here
   link, rule_text  '' (no rule text for hazard zones)
@@ -106,8 +106,8 @@ def map_wlv(feature: Feature, collection: str) -> Optional[Feature]:
         municipality=p.get("hauptgemeindename"),
         approved=approved,
         status=p.get("status"),
-        source="wlv",
-        id=f"wlv:{feature.get('id') or p.get('wlk_id') or ''}",
+        source="wlv-gzp",
+        id=f"wlv-gzp:{feature.get('id') or p.get('wlk_id') or ''}",
         source_date=_date(p.get("export")),
     )
 
@@ -149,8 +149,8 @@ def map_bz(feature: Feature) -> Optional[Feature]:
         municipality=p.get("NAME_D"),
         status=status,
         depth=p.get("BEARBEITUNGSTIEFE"),
-        source="bozen",
-        id=f"bozen:{p.get('OBJECTID') or feature.get('id') or ''}",
+        source="provinz-bozen",
+        id=f"provinz-bozen:{p.get('OBJECTID') or feature.get('id') or ''}",
     )
 
 

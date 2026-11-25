@@ -26,7 +26,7 @@ class WlvTest(unittest.TestCase):
         self.assertEqual(first["approved"], "2019-03-07")
         self.assertEqual(first["source_date"], "2024-02-15")
         self.assertEqual(first["municipality"], "Umhausen")
-        self.assertTrue(first["id"].startswith("wlv:wlv_gzp_sz_la."))
+        self.assertTrue(first["id"].startswith("wlv-gzp:wlv_gzp_sz_la."))
         self.assertEqual((first["name"], first["link"], first["rule_text"]), ("", "", ""))
 
     def test_torrent_zone_is_water(self):
@@ -62,8 +62,8 @@ class BzTest(unittest.TestCase):
         self.assertTrue({("H4", "high"), ("H3", "high"), ("H2", "medium")} <= pairs)
         self.assertEqual({z["hazard"] for z in zones}, {"avalanche", "water", "mass_movement"})
         self.assertIn("debris_flow", {z.get("process") for z in zones})
-        self.assertTrue(all(z["zone_type"] == "plan" and z["status"] == "Genehmigt" and z["source"] == "bozen" for z in zones))
-        self.assertTrue(all(z["id"].startswith("bozen:") for z in zones))
+        self.assertTrue(all(z["zone_type"] == "plan" and z["status"] == "Genehmigt" and z["source"] == "provinz-bozen" for z in zones))
+        self.assertTrue(all(z["id"].startswith("provinz-bozen:") for z in zones))
 
 
 class LfuTest(unittest.TestCase):

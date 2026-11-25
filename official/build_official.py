@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fetch the official hazard zones and write them in our schema as GeoJSON sequences.
 
-  python3 official/build_official.py OUT_DIR [--bbox min_lon,min_lat,max_lon,max_lat] [--sources wlv,bz,lfu]
+  python3 official/build_official.py OUT_DIR [--bbox min_lon,min_lat,max_lon,max_lat] [--sources wlv-gzp,provinz-bozen,lfu-bayern]
 
 Writes OUT_DIR/hazard_zone.geojsonl, OUT_DIR/hazard_coverage.geojsonl and OUT_DIR/sources.json
 (per source: count, updated, licence, attribution). tippecanoe turns the two sequences into the
@@ -39,12 +39,12 @@ BZ_LAYERS = ["Avalanches", "Hydrology", "Landslides"]
 LFU_ZIP = "https://www.lfu.bayern.de/gdi/dls/daten/georisiken/gefahrenhinweiskarten_epsg4258_shp.zip"
 
 SOURCES = {
-    "wlv": {
+    "wlv-gzp": {
         "name": "Gefahrenzonenpläne der Wildbach- und Lawinenverbauung (BML)",
         "licence": "INSPIRE, keine Nutzungsbedingungen (noConditionsApply)",
         "attribution": "Gefahrenzonenpläne: die.wildbach / BML, in eigene Darstellung umgewandelt",
     },
-    "bozen": {
+    "provinz-bozen": {
         "name": "Gefahrenzonenpläne der Gemeinden, Autonome Provinz Bozen",
         "licence": "CC0 1.0",
         "attribution": "Gefahrenzonenpläne: Autonome Provinz Bozen - Südtirol, in eigene Darstellung umgewandelt",
@@ -160,7 +160,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("out")
     parser.add_argument("--bbox")
-    parser.add_argument("--sources", default="wlv,bozen,lfu-bayern")
+    parser.add_argument("--sources", default="wlv-gzp,provinz-bozen,lfu-bayern")
     args = parser.parse_args()
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -178,13 +178,13 @@ def main() -> None:
             counts[props["source"]] += 1
             if props.get("source_date") and props["source_date"] > updated.get(props["source"], ""):
                 updated[props["source"]] = props["source_date"]
-            if props["source"] in ("wlv", "bozen") and props.get("municipality"):
+            if props["source"] in ("wlv-gzp", "provinz-bozen") and props.get("municipality"):
                 by_municipality[(props["source"], props["municipality"])].update(points(zone["geometry"]))
 
-        if "wlv" in wanted:
+        if "wlv-gzp" in wanted:
             for collection, feature in wlv_features(args.bbox):
                 write(map_wlv(feature, collection))
-        if "bozen" in wanted:
+        if "provinz-bozen" in wanted:
             for feature in bz_features(args.bbox):
                 write(map_bz(feature))
         if "lfu-bayern" in wanted:
@@ -201,8 +201,8 @@ def main() -> None:
                 props = {"source": source, "zone_type": "plan", "municipality": municipality, "approximate": True}
                 coverage.write(json.dumps({"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]}, "properties": props}, ensure_ascii=False) + "\n")
 
-    if counts.get("bozen"):
-        updated["bozen"] = date.today().isoformat()  # the service is updated daily and carries no date per zone
+    if counts.get("provinz-bozen"):
+        updated["provinz-bozen"] = date.today().isoformat()  # the service is updated daily and carries no date per zone
     meta = {key: {**SOURCES[key], "count": counts[key], "updated": updated.get(key)} for key in sorted(wanted)}
     (out / "sources.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(json.dumps(meta, ensure_ascii=False, indent=2))

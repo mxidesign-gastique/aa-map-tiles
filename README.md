@@ -56,7 +56,7 @@ Python, stdlib only), own workflow (`.github/workflows/official.yml`), own keys
 Fields shared by every zone layer (`hazard_zone` now, `protected_area` next; agreed in
 `karte-zonen-schema-gemeinsam.md`, empty string when the source has nothing): `id`
 (`<source>:<id in the source>`, stable, for promoteId), `name`, `kind` (wording of the source
-class), `source` (data source id: `wlv`, `bozen`, `lfu-bayern`), `source_date`, `binding`
+class), `source` (data source id: `wlv-gzp`, `provinz-bozen`, `lfu-bayern`), `source_date`, `binding`
 (`binding`/`recommended`, only with proof from the source), `link`, `rule_text`.
 
 Layer `hazard_zone` (polygons), in addition: `hazard` (avalanche, water, mass_movement,
@@ -80,5 +80,5 @@ Sources and licences (also per source in `sources.json`):
 - LfU Bavaria, hazard indication map (Georisiken), shapefile download: CC BY 4.0,
   "Datenquelle: Bayerisches Landesamt für Umwelt, www.lfu.bayern.de". Hints only.
 
-Run: `gh workflow run official.yml -f upload=false` (optional `-f bbox=...` and `-f sources=wlv,bozen,lfu-bayern`
+Run: `gh workflow run official.yml -f upload=false` (optional `-f bbox=...` and `-f sources=wlv-gzp,provinz-bozen,lfu-bayern`
 for a trial). Tests: `cd official && python3 -m unittest`.

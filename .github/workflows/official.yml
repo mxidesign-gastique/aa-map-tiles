@@ -1,0 +1,128 @@
+# Overlay tile set "official" (official data in our schema) for map.all-active.net:
+# official/build_official.py fetches the hazard zones of WLV Austria, the Province of Bolzano and the
+# LfU Bavaria hazard indication map, maps them onto our schema (official/hazard_zones.py) and
+# tippecanoe writes one PMTiles archive with the layers hazard_zone and hazard_coverage.
+#
+# Schema: README.md, section "official (Amtliche Daten)". Licences differ from the ODbL basemap,
+# hence a separate set; sources.json in the archive folder carries licence and attribution per source.
+#
+# Upload goes to official/<YYYYMMDD>/official.pmtiles, official/<YYYYMMDD>/sources.json and
+# official/current.json. Never touches tiles/ or routes/. Manual dispatch only.
+name: Official Tiles
+
+on:
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: 'Comma-separated sources (wlv, bz, lfu)'
+        type: string
+        default: 'wlv,bz,lfu'
+      bbox:
+        description: 'Optional bbox min_lon,min_lat,max_lon,max_lat for a trial (empty = all)'
+        type: string
+        default: ''
+      upload:
+        description: 'Upload to allactive-tiles-ssd under official/<YYYYMMDD>/ and update official/current.json (false = artifact only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-tiles
+  cancel-in-progress: false
+
+env:
+  ZONE: allactive-tiles-ssd
+  S3_ENDPOINT: https://de-s3.storage.bunnycdn.com
+  AWS_DEFAULT_REGION: de
+  WORK: /mnt/aa-official
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare
+        run: |
+          sudo mkdir -p "$WORK" && sudo chown "$USER" "$WORK"
+          sudo apt-get update -qq && sudo apt-get install -y -qq gdal-bin tippecanoe
+          ogr2ogr --version; tippecanoe --version
+
+      - name: Mapping tests
+        run: cd official && python3 -m unittest -v
+
+      - name: Fetch and map
+        env:
+          SOURCES: ${{ inputs.sources }}
+          BBOX: ${{ inputs.bbox }}
+        run: |
+          set -euo pipefail
+          start=$SECONDS
+          args=("$WORK/out" --sources "$SOURCES")
+          [[ -n "$BBOX" ]] && args+=(--bbox "$BBOX")
+          python3 official/build_official.py "${args[@]}"
+          wc -l "$WORK"/out/*.geojsonl
+          echo "FETCH_SECONDS=$((SECONDS - start))" >> "$GITHUB_ENV"
+
+      # From z6, so the coverage shows at regional zoom (the app shows zones from z11), hint areas are small and many: tippecanoe may
+      # drop the smallest below z13, never at z14 (the max zoom, overzoomed beyond).
+      - name: Tiles
+        run: |
+          set -euo pipefail
+          start=$SECONDS
+          tippecanoe -o "$WORK/official.pmtiles" --force \
+            -z14 --simplification=4 --detect-shared-borders \
+            --drop-smallest-as-needed --coalesce-densest-as-needed --extend-zooms-if-still-dropping \
+            --attribution="Gefahrenzonen: WLV/BML, Autonome Provinz Bozen (CC0), LfU Bayern (CC BY 4.0)" \
+            -L'{"file":"'"$WORK"'/out/hazard_zone.geojsonl","layer":"hazard_zone"}' \
+            -L'{"file":"'"$WORK"'/out/hazard_coverage.geojsonl","layer":"hazard_coverage"}' \
+            -Z6
+          ls -l "$WORK/official.pmtiles"
+          echo "TILE_SECONDS=$((SECONDS - start))" >> "$GITHUB_ENV"
+          {
+            echo "### official"
+            echo "- fetch ${FETCH_SECONDS}s, tiles $((SECONDS - start))s, $(stat -c %s "$WORK/official.pmtiles") bytes"
+            echo '```json'; cat "$WORK/out/sources.json"; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: official
+          path: |
+            ${{ env.WORK }}/official.pmtiles
+            ${{ env.WORK }}/out/sources.json
+          retention-days: 3
+
+      - name: Upload to Bunny storage
+        if: ${{ inputs.upload }}
+        env:
+          AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          version=$(date -u +%Y%m%d)
+          key="official/$version/official.pmtiles"
+          aws configure set default.s3.multipart_chunksize 64MB
+          aws s3 cp "$WORK/official.pmtiles" "s3://$ZONE/$key" --endpoint-url "$S3_ENDPOINT" \
+            --content-type application/vnd.pmtiles --no-progress
+          aws s3 cp "$WORK/out/sources.json" "s3://$ZONE/official/$version/sources.json" --endpoint-url "$S3_ENDPOINT" \
+            --content-type application/json --no-progress
+          remote=$(aws s3api head-object --bucket "$ZONE" --key "$key" --endpoint-url "$S3_ENDPOINT" --query ContentLength --output text)
+          size=$(stat -c %s "$WORK/official.pmtiles")
+          [[ "$remote" == "$size" ]] || { echo "::error::size mismatch $key"; exit 1; }
+          python3 -c "import json, sys; json.dump({'archive': sys.argv[1], 'bytes': int(sys.argv[2]), 'built': sys.argv[3], 'run': int(sys.argv[4]), 'sources': json.load(open(sys.argv[5]))}, open('/tmp/current.json', 'w'), ensure_ascii=False)" \
+            "$key" "$size" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ github.run_id }}" "$WORK/out/sources.json"
+          aws s3 cp /tmp/current.json "s3://$ZONE/official/current.json" --endpoint-url "$S3_ENDPOINT" \
+            --content-type application/json --cache-control no-cache --no-progress
+          echo "- Uploaded \`$key\`, \`official/current.json\` updated" >> "$GITHUB_STEP_SUMMARY"
+          aws s3api list-objects-v2 --bucket "$ZONE" --prefix official/ --endpoint-url "$S3_ENDPOINT" \
+            --query 'Contents[].Key' --output text | tr '\t' '\n' \
+            | grep -E '^official/[0-9]{8}/official\.pmtiles$' | sort | head -n -3 | while read -r old; do
+              [[ -z "$old" || "$old" == "$key" ]] && continue
+              aws s3 rm "s3://$ZONE/$old" --endpoint-url "$S3_ENDPOINT"
+              aws s3 rm "s3://$ZONE/${old%/official.pmtiles}/sources.json" --endpoint-url "$S3_ENDPOINT" || true
+            done

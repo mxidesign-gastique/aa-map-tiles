@@ -1,0 +1,180 @@
+"""Map official natural-hazard zones onto the tile set schema `official`, layer `hazard_zone`.
+
+One schema for every source, so the app draws, explains and filters all of them alike
+(README.md, section "official (Amtliche Daten)"):
+
+  hazard        avalanche | water | mass_movement | unspecified
+  process       finer process when the source names one (rockfall, landslide, ...)
+  level         high | medium | low | reserved | hint
+  rank          1 (high) ... 5 (hint), draw order
+  binding       plan (zone of an approved plan) | reserved_area | hint (hazard indication map)
+  level_raw     wording of the level in the source ("H3", "Rote Zone")
+  label         full wording of the source class
+  municipality, approved (YYYY-MM-DD), valid_from, status, source, source_id, updated
+
+Sources: WLV Austria (OGC API Features), Autonomous Province of Bolzano (WFS, CC0),
+LfU Bavaria (hazard indication map, shapefile, CC BY 4.0). Rows a source marks as
+"examined and not dangerous" are dropped: they are no zone.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Optional
+
+RANK = {"high": 1, "medium": 2, "low": 3, "reserved": 4, "hint": 5}
+
+Feature = dict[str, Any]
+
+
+def _date(value: Any) -> Optional[str]:
+    """dd.mm.yyyy -> YYYY-MM-DD; a bare year stays a year; anything else -> None."""
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", text)
+    if match:
+        day, month, year = match.groups()
+        return f"{year}-{int(month):02d}-{int(day):02d}"
+    if re.fullmatch(r"\d{4}", text):
+        return text
+    return None
+
+
+def _zone(geometry: Any, **props: Any) -> Feature:
+    props["rank"] = RANK[props["level"]]
+    return {"type": "Feature", "geometry": geometry, "properties": {k: v for k, v in props.items() if v not in (None, "")}}
+
+
+# --- WLV Austria -------------------------------------------------------------------------------
+
+WLV_PROCESS = {
+    "rutschung": ("mass_movement", "landslide"),
+    "steinschlag": ("mass_movement", "rockfall"),
+    "vernässung": ("water", "waterlogging"),
+}
+
+
+def map_wlv(feature: Feature, collection: str) -> Optional[Feature]:
+    """One feature of a WLV collection (`i000901:wlv_gzp_*`) -> hazard_zone, or None."""
+    p = feature.get("properties") or {}
+    label = str(p.get("objektart") or "").strip()
+    name = collection.split(":")[-1]
+    hazard, process, level, binding, level_raw = "unspecified", None, None, None, None
+
+    if name in ("wlv_gzp_sz_la", "wlv_gzp_sz_wb"):
+        hazard = "avalanche" if name.endswith("_la") else "water"
+        process = None if hazard == "avalanche" else "torrent"
+        if "Rote Zone" in label:
+            level, level_raw = "high", "Rote Zone"
+        elif "Gelbe Zone" in label:
+            level, level_raw = "medium", "Gelbe Zone"
+        binding = "plan"
+    elif name == "wlv_gzp_bvb":
+        level, binding, level_raw = "reserved", "reserved_area", "Blauer Vorbehaltsbereich"
+    elif name == "wlv_gzp_rrb":
+        level, binding, level_raw = "reserved", "reserved_area", "Raumrelevanter Bereich"
+    elif name == "wlv_gzp_bhb":
+        level, binding, level_raw = "hint", "hint", "Brauner Hinweisbereich"
+        kind = label.split(" - ", 1)[-1].strip().lower()
+        hazard, process = WLV_PROCESS.get(kind, ("unspecified", None))
+    elif name == "wlv_gzp_vhb":
+        level, binding, level_raw = "hint", "hint", "Violetter Hinweisbereich"
+    if level is None:
+        return None
+
+    approved = _date(p.get("datum ministerielle genehmigung"))
+    return _zone(
+        feature.get("geometry"),
+        hazard=hazard,
+        process=process,
+        level=level,
+        binding=binding,
+        level_raw=level_raw,
+        label=label,
+        plan=p.get("name des gefahrenzonenplans"),
+        municipality=p.get("hauptgemeindename"),
+        approved=approved,
+        valid_from=approved,
+        status=p.get("status"),
+        source="wlv",
+        source_id=str(feature.get("id") or p.get("wlk_id") or ""),
+        updated=_date(p.get("export")),
+    )
+
+
+# --- Autonomous Province of Bolzano ----------------------------------------------------------
+
+BZ_HAZARD = {"Lawine": "avalanche", "Wassergefahr": "water", "Massenbewegung": "mass_movement"}
+BZ_LEVEL = {"H4": "high", "H3": "high", "H2": "medium", "H1": "low"}
+BZ_PROCESS = {
+    "Fließlawine": "flowing_avalanche",
+    "Staublawine": "powder_avalanche",
+    "Gleitschnee": "snow_glide",
+    "Übersarung": "flood",
+    "Überflutung": "flood",
+    "Vermurung": "debris_flow",
+    "Sturz": "rockfall",
+    "Hangmure": "slope_failure",
+    "Rutschung": "landslide",
+}
+
+
+def map_bz(feature: Feature) -> Optional[Feature]:
+    """One feature of `UrbanPlan-HazardZonePlan-*` -> hazard_zone, or None (not dangerous)."""
+    p = feature.get("properties") or {}
+    label = str(p.get("GEFAHR") or "").strip()
+    prefix = label.split(" - ", 1)[0]
+    match = re.search(r"\((H[1-4])\)", label)
+    if not match or prefix not in BZ_HAZARD:
+        return None  # "Untersucht und nicht gefährlich" or an unknown class
+    status = p.get("DESC_D") or None
+    return _zone(
+        feature.get("geometry"),
+        hazard=BZ_HAZARD[prefix],
+        process=BZ_PROCESS.get(str(p.get("PROZESS") or "")),
+        level=BZ_LEVEL[match.group(1)],
+        binding="plan",
+        level_raw=match.group(1),
+        label=label,
+        municipality=p.get("NAME_D"),
+        status=status,
+        depth=p.get("BEARBEITUNGSTIEFE"),
+        source="bz",
+        source_id=str(p.get("OBJECTID") or feature.get("id") or ""),
+    )
+
+
+# --- LfU Bavaria -------------------------------------------------------------------------------
+
+LFU_PROCESS = [
+    ("steinschlag", ("mass_movement", "rockfall")),
+    ("tiefreichende rutschung", ("mass_movement", "deep_landslide")),
+    ("rutschung", ("mass_movement", "landslide")),
+    ("hanganbruch", ("mass_movement", "slope_failure")),
+    ("subrosion", ("mass_movement", "sinkhole")),
+    ("senkung", ("mass_movement", "subsidence")),
+]
+
+
+def map_lfu(record: Feature, layer: str) -> Optional[Feature]:
+    """One shape record of the hazard indication map (`ghk_*`) -> hazard_zone, or None.
+
+    `ghk_uebersicht` is the coverage, not a zone; build_official writes it to hazard_coverage.
+    """
+    if layer.startswith("ghk_uebersicht"):
+        return None
+    p = record.get("properties") or {}
+    label = str(p.get("PROZESS") or "").strip()
+    lowered = label.lower()
+    hazard, process = next((value for key, value in LFU_PROCESS if key in lowered), ("mass_movement", None))
+    return _zone(
+        record.get("geometry"),
+        hazard=hazard,
+        process=process,
+        level="hint",
+        binding="hint",
+        level_raw="Gefahrenhinweis",
+        label=label,
+        source="lfu",
+        source_id=layer,
+        updated=_date(p.get("STAND")),
+    )

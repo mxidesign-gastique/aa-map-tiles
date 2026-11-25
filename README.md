@@ -44,3 +44,35 @@ along with `sample=true`. `upload=true` writes `routes/<YYYYMMDD>/routes.pmtiles
 Licence: the data is © OpenStreetMap contributors under the ODbL. The archive is a derived
 database with its own layer; on request it is provided as PMTiles or as the filtered PBF the
 tiles were built from. Attribution in the metadata: `© OpenStreetMap contributors (ODbL)`.
+
+## official (Amtliche Daten)
+
+A separate overlay tile set (PMTiles, MVT, zoom 6-14) with official data mapped onto our own
+schema, so the app draws, explains and combines every source alike. Own code (`official/`,
+Python, stdlib only), own workflow (`.github/workflows/official.yml`), own keys
+(`official/<YYYYMMDD>/official.pmtiles`, `official/<YYYYMMDD>/sources.json`,
+`official/current.json`). Separate from the ODbL sets because licences and update cycles differ.
+
+Layer `hazard_zone` (polygons): `hazard` (avalanche, water, mass_movement, unspecified),
+`process` (flowing_avalanche, powder_avalanche, snow_glide, torrent, flood, debris_flow,
+rockfall, landslide, deep_landslide, slope_failure, sinkhole, subsidence, waterlogging),
+`level` (high, medium, low, reserved, hint), `rank` (1-5), `binding` (plan, reserved_area, hint),
+`level_raw` (wording of the level, e.g. H3, Rote Zone), `label` (wording of the source class),
+`plan`, `municipality`, `approved` and `valid_from` (YYYY-MM-DD), `status`, `depth` (Bolzano:
+level of study), `source` (wlv, bz, lfu), `source_id`, `updated`.
+
+Layer `hazard_coverage` (polygons): where a source has data; `source`, `binding`,
+`municipality`, `approximate` (true = convex hull of the zones of a municipality; LfU ships its
+own overview). Outside coverage the app says it has no official zones, never that it is safe.
+
+Sources and licences (also per source in `sources.json`):
+- WLV Austria, hazard zone plans, OGC API Features `gis.lfrz.gv.at/api/geodata/i000901`:
+  INSPIRE, no conditions apply. Red/yellow zones = plan, blue and space-relevant areas =
+  reserved_area, brown/violet areas = hint.
+- Autonomous Province of Bolzano, hazard zone plans, WFS `p_bz-TerritorialPlans`: CC0 1.0.
+  H4/H3 high, H2 medium, H1 low; "examined and not dangerous" is dropped.
+- LfU Bavaria, hazard indication map (Georisiken), shapefile download: CC BY 4.0,
+  "Datenquelle: Bayerisches Landesamt für Umwelt, www.lfu.bayern.de". Hints only.
+
+Run: `gh workflow run official.yml -f upload=false` (optional `-f bbox=...` and `-f sources=...`
+for a trial). Tests: `cd official && python3 -m unittest`.

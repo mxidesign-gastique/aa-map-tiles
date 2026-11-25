@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+  <!-- Planetiler profile for the routes overlay (hiking, cycling, mtb, horse, winter networks).
+       Modelled on planetiler-examples/standalone.pom.xml of Planetiler v0.10.2.
+       Build: mvn -q package   ->   target/aa-routes-1.0-with-deps.jar -->
+
+  <modelVersion>4.0.0</modelVersion>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>21</maven.compiler.release>
+    <planetiler.version>0.10.2</planetiler.version>
+    <mainClass>net.allactive.routes.RoutesOverlay</mainClass>
+  </properties>
+
+  <groupId>net.allactive</groupId>
+  <artifactId>aa-routes</artifactId>
+  <version>1.0</version>
+  <name>All-Active routes overlay</name>
+
+  <repositories>
+    <!-- Planetiler depends on geotools for shapefile processing, which is not in Maven Central. -->
+    <repository>
+      <id>osgeo</id>
+      <name>OSGeo Release Repository</name>
+      <url>https://repo.osgeo.org/repository/release/</url>
+      <snapshots>
+        <enabled>false</enabled>
+      </snapshots>
+      <releases>
+        <enabled>true</enabled>
+      </releases>
+    </repository>
+  </repositories>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.onthegomap.planetiler</groupId>
+      <artifactId>planetiler-core</artifactId>
+      <version>${planetiler.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.14.0</version>
+      </plugin>
+
+      <!-- Executable fat jar. The "with-deps" descriptor ships inside planetiler-core, hence the
+           plugin dependency (same setup as the Planetiler examples). -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <version>3.8.0</version>
+        <dependencies>
+          <dependency>
+            <groupId>com.onthegomap.planetiler</groupId>
+            <artifactId>planetiler-core</artifactId>
+            <version>${planetiler.version}</version>
+          </dependency>
+        </dependencies>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <Multi-Release>true</Multi-Release>
+            </manifestEntries>
+            <manifest>
+              <mainClass>${mainClass}</mainClass>
+            </manifest>
+          </archive>
+          <descriptorRefs>
+            <descriptorRef>with-deps</descriptorRef>
+          </descriptorRefs>
+        </configuration>
+        <executions>
+          <execution>
+            <id>make-assembly</id>
+            <phase>package</phase>
+            <goals>
+              <goal>single</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -125,6 +125,14 @@ jobs:
             echo '```json'; cat "$WORK/out/sources.json"; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # tippecanoe can change attribute types when it coalesces: decode the overview zooms and stop on anything
+      # but the number 0/1 in hazard_coverage.approximate (2.53 wrote a coalesced `true` as a zone id string).
+      - name: Check attribute types in the tiles
+        run: |
+          set -euo pipefail
+          tippecanoe-decode -l hazard_coverage -Z6 -z9 "$WORK/official.pmtiles" > /tmp/coverage.json
+          python3 official/check_tiles.py < /tmp/coverage.json | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Never replace a good archive with a broken one: compare with the live current.json.
       - name: Compare with the live archive
         if: ${{ env.UPLOAD == 'true' }}

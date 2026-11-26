@@ -249,6 +249,15 @@ def hull(coords: set[tuple[float, float]]) -> list[list[float]] | None:
     return [list(p) for p in ring + [ring[0]]] if len(ring) >= 3 else None
 
 
+def build_meta(wanted: set[str], counts: dict[str, int], updated: dict[str, str]) -> dict[str, dict]:
+    """The sources.json content. `updated` is the newest date the authority gave, else None: never the
+    day of the build (the Bolzano service and several protected-area sources carry no date)."""
+    meta = {key: {**SOURCES[key], "count": counts[key], "updated": updated.get(key)} for key in sorted(wanted)}
+    for key in sorted(k for k in counts if k.startswith("protected:")):
+        meta[key] = {"count": counts[key], "updated": updated.get(key)}
+    return meta
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("out")
@@ -331,11 +340,7 @@ def main() -> None:
                 props = {"source": source, "zone_type": "plan", "municipality": municipality, "approximate": True}
                 coverage.write(json.dumps({"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]}, "properties": props}, ensure_ascii=False) + "\n")
 
-    if counts.get("provinz-bozen"):
-        updated["provinz-bozen"] = date.today().isoformat()  # the service is updated daily and carries no date per zone
-    meta = {key: {**SOURCES[key], "count": counts[key], "updated": updated.get(key)} for key in sorted(wanted)}
-    for key in sorted(k for k in counts if k.startswith("protected:")):
-        meta[key] = {"count": counts[key], "updated": date.today().isoformat()}
+    meta = build_meta(wanted, counts, updated)
     (out / "sources.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(json.dumps(meta, ensure_ascii=False, indent=2))
     skipped_trails = unknown_trails.pop("(skipped: no trail type)", 0)

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from datetime import date
 
-from build_official import date_of, download_date
+from build_official import build_meta, date_of, download_date
 
 
 class DownloadDateTest(unittest.TestCase):
@@ -22,6 +22,14 @@ class DownloadDateTest(unittest.TestCase):
             self.assertEqual(download_date(archive), date.today().isoformat())
             (pathlib.Path(work) / "by_basisdlm_plus.zip.date").write_text("2026-11-23\n")
             self.assertEqual(download_date(archive), "2026-11-23")
+
+
+class MetaTest(unittest.TestCase):
+    def test_bolzano_without_a_date_is_not_stamped_with_the_build_day(self):
+        meta = build_meta({"provinz-bozen", "wlv-gzp"}, {"provinz-bozen": 5, "wlv-gzp": 2}, {"wlv-gzp": "2026-05-01"})
+        self.assertIsNone(meta["provinz-bozen"]["updated"])
+        self.assertEqual(meta["provinz-bozen"]["count"], 5)
+        self.assertEqual(meta["wlv-gzp"]["updated"], "2026-05-01")
 
 
 if __name__ == "__main__":

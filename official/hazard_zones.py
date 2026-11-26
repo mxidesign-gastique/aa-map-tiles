@@ -8,7 +8,7 @@ One schema for every source, so the app draws, explains and filters all of them 
   name          proper name, '' for hazard zones (they have none)
   kind          wording of the source class ("Summenzone - Rote Zone Lawine")
   source        data source id of the register: wlv-gzp | provinz-bozen | lfu-bayern
-  source_date   data date of the source (YYYY-MM-DD or a year), else '' (build date in current.json)
+  source_date   data date of the source (YYYY-MM-DD or a year), else '' (never the build day; Bolzano gives none)
   binding       binding | recommended | '' - only with proof from the source, so '' here
   link, rule_text  '' (no rule text for hazard zones)
   hazard_zone only:

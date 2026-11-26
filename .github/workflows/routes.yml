@@ -7,7 +7,11 @@
 # to route relations and graded ways and cut to the pilot box. Planetiler then only sees the
 # few hundred MB of route relations, their member ways and nodes.
 #
-# Upload goes to routes/<YYYYMMDD>/routes.pmtiles plus routes/current.json. This workflow never
+# The same filtered, cut file ($WORK/routes.osm.pbf) also feeds routes/export_relations.py, which writes
+# the NOT public export routes.ndjson.gz (one line per hiking/foot relation, full geometry) for the
+# backend tour import. Tile osm_id and export ref therefore always come from one source.
+#
+# Upload goes to routes/<YYYYMMDD>/routes.pmtiles and routes.ndjson.gz plus routes/current.json. This workflow never
 # touches tiles/current.json (the basemap) and has no make-live step: the API reads routes/current.json.
 #
 # Manual dispatch only, so forks and pull requests never see the zone secret.
@@ -101,12 +105,25 @@ jobs:
           set -euo pipefail
           start=$SECONDS
           url=https://download.geofabrik.de/europe/alps-latest.osm.pbf
-          curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors -o "$WORK/alps.osm.pbf" "$url"
+          curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors -D "$WORK/alps.headers" -o "$WORK/alps.osm.pbf" "$url"
           curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors -o "$WORK/alps.md5" "$url.md5"
           expected=$(cut -d' ' -f1 "$WORK/alps.md5")
           actual=$(md5sum "$WORK/alps.osm.pbf" | cut -d' ' -f1)
           [[ "$expected" == "$actual" ]] || { echo "::error::md5 mismatch ($expected vs $actual)"; exit 1; }
           echo "DOWNLOAD_BYTES=$(stat -c %s "$WORK/alps.osm.pbf")" >> "$GITHUB_ENV"
+          # Date of the data (YYYY-MM-DD) for the export: the replication timestamp in the file header
+          # (the state of the OSM data); without it the Last-Modified header of the download.
+          stamp=$(osmium fileinfo -g header.option.osmosis_replication_timestamp "$WORK/alps.osm.pbf" || true)
+          if [[ "$stamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+            source_date=${stamp:0:10}; source_from=replication-timestamp
+          else
+            modified=$(grep -i '^last-modified:' "$WORK/alps.headers" | tail -n 1 | cut -d' ' -f2- | tr -d '\r')
+            source_date=$(date -u -d "$modified" +%F 2>/dev/null || true); source_from=last-modified
+          fi
+          [[ "$source_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "::error::no data date (header: '$stamp', last-modified: '${modified:-}')"; exit 1; }
+          echo "source date $source_date ($source_from)"
+          echo "SOURCE_DATE=$source_date" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_FROM=$source_from" >> "$GITHUB_ENV"
           echo "DOWNLOAD_SECONDS=$((SECONDS - start))" >> "$GITHUB_ENV"
           t=$SECONDS
           osmium tags-filter "$WORK/alps.osm.pbf" \
@@ -144,6 +161,23 @@ jobs:
           rm -rf "${WORK:?}/tmp"
           ls -l "$WORK/routes.pmtiles"
 
+      # Not public: the file is only uploaded to the zone; the edge script never serves /routes/.
+      # Same input file as Planetiler, so relation ids match the osm_id of the tile features.
+      - name: Export relations (NDJSON)
+        run: |
+          set -euo pipefail
+          start=$SECONDS
+          python3 -m venv "$WORK/venv"
+          "$WORK/venv/bin/pip" install -q osmium==4.3.2
+          "$WORK/venv/bin/python" -I routes/export_relations.py "$WORK/routes.osm.pbf" "$WORK/routes.ndjson.gz" \
+            --source-date "$SOURCE_DATE" | tee "$WORK/export-counts.txt"
+          rows=$(sed -n 's/^written=//p' "$WORK/export-counts.txt")
+          [[ -n "$rows" && "$rows" -gt 0 ]] || { echo "::error::export wrote no rows"; exit 1; }
+          gzip -t "$WORK/routes.ndjson.gz"
+          echo "EXPORT_ROWS=$rows" >> "$GITHUB_ENV"
+          echo "EXPORT_BYTES=$(stat -c %s "$WORK/routes.ndjson.gz")" >> "$GITHUB_ENV"
+          echo "EXPORT_SECONDS=$((SECONDS - start))" >> "$GITHUB_ENV"
+
       - name: Check the archive
         run: |
           set -euo pipefail
@@ -168,12 +202,19 @@ jobs:
             echo "| osmium tags-filter | ${FILTER_SECONDS:-n/a} |"
             echo "| Cut to the box | ${CUT_SECONDS:-n/a} |"
             echo "| Planetiler | ${PLANETILER_SECONDS:-n/a} |"
+            echo "| Relation export | ${EXPORT_SECONDS:-n/a} |"
             echo
             if [[ -n "${PBF_BYTES:-}" ]]; then echo "- Planetiler input PBF: $PBF_BYTES bytes"; fi
             if [[ -f "$WORK/routes.pmtiles" ]]; then
               echo "- Archive: $(stat -c %s "$WORK/routes.pmtiles") bytes"
               echo '```'
               pmtiles show "$WORK/routes.pmtiles" | grep -Ei 'tile|zoom|bounds|size' || true
+              echo '```'
+            fi
+            if [[ -f "$WORK/export-counts.txt" ]]; then
+              echo "- Export routes.ndjson.gz: ${EXPORT_ROWS:-n/a} rows, ${EXPORT_BYTES:-n/a} bytes, data date ${SOURCE_DATE:-n/a} (${SOURCE_DATE_FROM:-n/a})"
+              echo '```'
+              cat "$WORK/export-counts.txt"
               echo '```'
             fi
             if [[ -f "$WORK/planetiler.log" ]]; then
@@ -207,6 +248,14 @@ jobs:
           retention-days: 3
           compression-level: 0
 
+      - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.upload }}
+        with:
+          name: routes-export
+          path: ${{ env.WORK }}/routes.ndjson.gz
+          retention-days: 3
+          compression-level: 0
+
       - name: Upload to Bunny storage
         if: ${{ inputs.upload }}
         env:
@@ -224,17 +273,33 @@ jobs:
           size=$(stat -c %s "$WORK/routes.pmtiles")
           echo "local $size, remote $remote"
           [[ "$remote" == "$size" ]] || { echo "::error::size mismatch $key"; exit 1; }
-          python3 -c "import json, sys; json.dump({'archive': sys.argv[1], 'bytes': int(sys.argv[2]), 'built': sys.argv[3], 'run': int(sys.argv[4]), 'area': sys.argv[5]}, open('/tmp/current.json', 'w'))" \
-            "$key" "$size" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ github.run_id }}" "$AREA"
+          # The export (not public) goes up first and is size checked; current.json names both of this run.
+          export_key="routes/$version/routes.ndjson.gz"
+          aws s3 cp "$WORK/routes.ndjson.gz" "s3://$ZONE/$export_key" --endpoint-url "$S3_ENDPOINT" \
+            --content-type application/gzip --no-progress
+          export_remote=$(aws s3api head-object --bucket "$ZONE" --key "$export_key" --endpoint-url "$S3_ENDPOINT" --query ContentLength --output text)
+          export_size=$(stat -c %s "$WORK/routes.ndjson.gz")
+          echo "export local $export_size, remote $export_remote"
+          [[ "$export_remote" == "$export_size" ]] || { echo "::error::size mismatch $export_key"; exit 1; }
+          python3 -c "import json, sys; json.dump({'archive': sys.argv[1], 'bytes': int(sys.argv[2]), 'built': sys.argv[3], 'run': int(sys.argv[4]), 'area': sys.argv[5], 'export': {'key': sys.argv[6], 'bytes': int(sys.argv[7]), 'rows': int(sys.argv[8])}}, open('/tmp/current.json', 'w'))" \
+            "$key" "$size" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ github.run_id }}" "$AREA" "$export_key" "$export_size" "$EXPORT_ROWS"
           aws s3 cp /tmp/current.json "s3://$ZONE/routes/current.json" --endpoint-url "$S3_ENDPOINT" \
             --content-type application/json --cache-control no-cache --no-progress
           cat /tmp/current.json
-          echo "- Uploaded \`$key\` ($size bytes), \`routes/current.json\` updated" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Uploaded \`$key\` ($size bytes) and \`$export_key\` ($export_size bytes, $EXPORT_ROWS rows), \`routes/current.json\` updated" >> "$GITHUB_STEP_SUMMARY"
           # Keep the newest three archives; never the one just written.
           aws s3api list-objects-v2 --bucket "$ZONE" --prefix routes/ --endpoint-url "$S3_ENDPOINT" \
             --query 'Contents[].Key' --output text | tr '\t' '\n' \
             | grep -E '^routes/[0-9]{8}/routes\.pmtiles$' | sort | head -n -3 | while read -r old; do
               [[ -z "$old" || "$old" == "$key" ]] && continue
+              echo "deleting $old"
+              aws s3 rm "s3://$ZONE/$old" --endpoint-url "$S3_ENDPOINT"
+            done
+          # Same for the exports: keep the newest three, never the one just written.
+          aws s3api list-objects-v2 --bucket "$ZONE" --prefix routes/ --endpoint-url "$S3_ENDPOINT" \
+            --query 'Contents[].Key' --output text | tr '\t' '\n' \
+            | grep -E '^routes/[0-9]{8}/routes\.ndjson\.gz$' | sort | head -n -3 | while read -r old; do
+              [[ -z "$old" || "$old" == "$export_key" ]] && continue
               echo "deleting $old"
               aws s3 rm "s3://$ZONE/$old" --endpoint-url "$S3_ENDPOINT"
             done

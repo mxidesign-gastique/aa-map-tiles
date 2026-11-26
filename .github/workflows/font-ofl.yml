@@ -1,0 +1,42 @@
+# One-off: mirror the font licence of the glyphs (Noto Sans, SIL OFL 1.1) to allactive-tiles-ssd/font/OFL.txt,
+# served by the tiles edge as https://map.all-active.net/font/OFL.txt. Uploads exactly this one file, nothing else.
+# The source is pinned by its sha256; a changed upstream file stops the run before anything is written.
+name: Font licence
+
+on:
+  push:
+    branches: ['dev/font-ofl-2026-11-26']
+    paths: ['.github/workflows/font-ofl.yml']
+
+permissions:
+  contents: read
+
+env:
+  ZONE: allactive-tiles-ssd
+  S3_ENDPOINT: https://de-s3.storage.bunnycdn.com
+  AWS_DEFAULT_REGION: de
+  SOURCE: https://raw.githubusercontent.com/protomaps/basemaps-assets/main/fonts/OFL.txt
+  SHA256: 7713cfc8e3c36d5ec4aa3d6cffe7500a1b3310f8a86d914b8ea09c2a9dee7c2d
+  KEY: font/OFL.txt
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and check
+        run: |
+          set -euo pipefail
+          curl -fsSL "$SOURCE" -o /tmp/OFL.txt
+          echo "$SHA256  /tmp/OFL.txt" | sha256sum -c -
+          head -c 200 /tmp/OFL.txt
+      - name: Upload
+        env:
+          AWS_ACCESS_KEY_ID: allactive-tiles-ssd
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          aws s3 cp /tmp/OFL.txt "s3://$ZONE/$KEY" --endpoint-url "$S3_ENDPOINT" \
+            --content-type 'text/plain; charset=utf-8' --no-progress
+          aws s3 cp "s3://$ZONE/$KEY" /tmp/back.txt --endpoint-url "$S3_ENDPOINT" --no-progress
+          echo "$SHA256  /tmp/back.txt" | sha256sum -c -
+          echo "- Uploaded \`$KEY\` ($(stat -c %s /tmp/OFL.txt) bytes, sha256 $SHA256)" >> "$GITHUB_STEP_SUMMARY"

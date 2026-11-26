@@ -45,14 +45,15 @@ class CoverageTest(unittest.TestCase):
         plan = coverage_feature(self.GEOMETRY, "provinz-bozen", "plan", "Jenesien", approximate=True)["properties"]
         for props in (hint, plan):
             self.assertEqual(tuple(props), COVERAGE_KEYS)
-            self.assertIsInstance(props["approximate"], bool)
+            self.assertIs(type(props["approximate"]), int)
             self.assertIsInstance(props["municipality"], str)
-        self.assertIs(hint["approximate"], False)
-        self.assertIs(plan["approximate"], True)
+        self.assertEqual(hint["approximate"], 0)
+        self.assertEqual(plan["approximate"], 1)
 
     def test_approximate_never_carries_a_zone_id(self):
         props = coverage_feature(self.GEOMETRY, "wlv-gzp", "plan", "X", approximate="lfu-bayern:ghk_sturz_o_wald:1018014")["properties"]
-        self.assertIs(props["approximate"], True)
+        self.assertIs(type(props["approximate"]), int)
+        self.assertEqual(props["approximate"], 1)
 
 
 if __name__ == "__main__":

@@ -254,11 +254,14 @@ COVERAGE_KEYS = ("source", "zone_type", "municipality", "approximate")
 
 def coverage_feature(geometry: dict, source: str, zone_type: str, municipality: str = "", approximate: bool = False) -> dict:
     """One hazard_coverage Feature. Every feature carries the same four attributes with the same types,
-    so no feature is without `approximate` (true only for the convex hull of a municipality's zones;
-    LfU ships its own overview, false) and tippecanoe never has to reconcile unequal attribute sets
-    when it coalesces features of different sources."""
+    so no feature is without `approximate` (1 only for the convex hull of a municipality's zones;
+    LfU ships its own overview, 0) and tippecanoe never has to reconcile unequal attribute sets
+    when it coalesces features of different sources.
+
+    `approximate` is the integer 1 or 0, never a boolean: tippecanoe 2.53 wrote a coalesced `true`
+    as a string of another feature's zone id. official/check_tiles.py checks the archive for it."""
     return {"type": "Feature", "geometry": geometry,
-            "properties": {"source": source, "zone_type": zone_type, "municipality": municipality, "approximate": bool(approximate)}}
+            "properties": {"source": source, "zone_type": zone_type, "municipality": municipality, "approximate": 1 if approximate else 0}}
 
 
 def build_meta(wanted: set[str], counts: dict[str, int], updated: dict[str, str]) -> dict[str, dict]:

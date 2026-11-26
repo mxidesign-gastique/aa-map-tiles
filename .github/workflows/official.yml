@@ -7,8 +7,12 @@
 # Schema: README.md, section "official (Amtliche Daten)". Licences differ from the ODbL basemap,
 # hence a separate set; sources.json in the archive folder carries licence and attribution per source.
 #
-# Upload goes to official/<YYYYMMDD>/official.pmtiles, official/<YYYYMMDD>/sources.json and
-# official/current.json. Never touches tiles/ or routes/.
+# Channel prod (default, always for scheduled runs): upload goes to official/<YYYYMMDD>/official.pmtiles,
+# official/<YYYYMMDD>/sources.json and official/current.json.
+# Channel dev (manual runs only): upload goes to official-dev/<YYYYMMDD>-<run_id>/official.pmtiles,
+# sources.json next to it and official-dev/current.json; cleanup only under official-dev/ (newest 3 stay),
+# the comparison reads official-dev/current.json and falls back to official/current.json (read only).
+# Never touches tiles/ or routes/, and dev never writes or deletes anything under official/.
 #
 # Stays current on its own: every Monday the whole set is rebuilt from the live services and goes
 # live (the BVV trails change weekly, the LfU map monthly, the Bolzano plans daily, WLV rarely).
@@ -31,9 +35,16 @@ on:
         type: string
         default: ''
       upload:
-        description: 'Upload to allactive-tiles-ssd under official/<YYYYMMDD>/ and update official/current.json (false = artifact only)'
+        description: 'Upload to allactive-tiles-ssd under the channel prefix (prod: official/, dev: official-dev/) and update its current.json (false = artifact only)'
         type: boolean
         default: false
+      channel:
+        description: 'Target channel: prod = official/, dev = official-dev/ (scheduled runs are always prod)'
+        type: choice
+        options:
+          - prod
+          - dev
+        default: prod
 
 permissions:
   contents: read
@@ -47,6 +58,7 @@ env:
   # A scheduled run has no inputs: all sources, the whole area, upload.
   SOURCES: ${{ inputs.sources || 'wlv-gzp,provinz-bozen,lfu-bayern,bvv-freizeitwege' }}
   BBOX: ${{ inputs.bbox || '' }}
+  CHANNEL: ${{ github.event_name == 'schedule' && 'prod' || inputs.channel || 'prod' }}
   UPLOAD: ${{ github.event_name == 'schedule' || inputs.upload }}
   S3_ENDPOINT: https://de-s3.storage.bunnycdn.com
   AWS_DEFAULT_REGION: de
@@ -58,6 +70,15 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
+
+      - name: Channel
+        run: |
+          set -euo pipefail
+          case "$CHANNEL" in
+            prod) echo "PREFIX=official" >> "$GITHUB_ENV" ;;
+            dev) echo "PREFIX=official-dev" >> "$GITHUB_ENV" ;;
+            *) echo "::error::unknown channel $CHANNEL"; exit 1 ;;
+          esac
 
       - name: Prepare
         run: |
@@ -112,8 +133,13 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          if ! aws s3 cp "s3://$ZONE/official/current.json" /tmp/live.json --endpoint-url "$S3_ENDPOINT" --no-progress; then
-            echo "no live archive yet"; exit 0
+          if ! aws s3 cp "s3://$ZONE/$PREFIX/current.json" /tmp/live.json --endpoint-url "$S3_ENDPOINT" --no-progress; then
+            # dev without its own pointer yet: compare with the prod pointer (read only)
+            if [[ "$CHANNEL" == dev ]] && aws s3 cp "s3://$ZONE/official/current.json" /tmp/live.json --endpoint-url "$S3_ENDPOINT" --no-progress; then
+              echo "dev: no official-dev/current.json yet, comparing with official/current.json"
+            else
+              echo "no live archive yet"; exit 0
+            fi
           fi
           python3 official/compare_sources.py /tmp/live.json "$WORK/out/sources.json" >> "$GITHUB_STEP_SUMMARY"
 
@@ -132,24 +158,30 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TILES_S3_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          version=$(date -u +%Y%m%d)
-          key="official/$version/official.pmtiles"
+          if [[ "$CHANNEL" == dev ]]; then
+            version="$(date -u +%Y%m%d)-${{ github.run_id }}"
+            keep_re='^official-dev/[0-9]{8}-[0-9]+/official\.pmtiles$'
+          else
+            version=$(date -u +%Y%m%d)
+            keep_re='^official/[0-9]{8}/official\.pmtiles$'
+          fi
+          key="$PREFIX/$version/official.pmtiles"
           aws configure set default.s3.multipart_chunksize 64MB
           aws s3 cp "$WORK/official.pmtiles" "s3://$ZONE/$key" --endpoint-url "$S3_ENDPOINT" \
             --content-type application/vnd.pmtiles --no-progress
-          aws s3 cp "$WORK/out/sources.json" "s3://$ZONE/official/$version/sources.json" --endpoint-url "$S3_ENDPOINT" \
+          aws s3 cp "$WORK/out/sources.json" "s3://$ZONE/$PREFIX/$version/sources.json" --endpoint-url "$S3_ENDPOINT" \
             --content-type application/json --no-progress
           remote=$(aws s3api head-object --bucket "$ZONE" --key "$key" --endpoint-url "$S3_ENDPOINT" --query ContentLength --output text)
           size=$(stat -c %s "$WORK/official.pmtiles")
           [[ "$remote" == "$size" ]] || { echo "::error::size mismatch $key"; exit 1; }
           python3 -c "import json, sys; json.dump({'archive': sys.argv[1], 'bytes': int(sys.argv[2]), 'built': sys.argv[3], 'run': int(sys.argv[4]), 'sources': json.load(open(sys.argv[5]))}, open('/tmp/current.json', 'w'), ensure_ascii=False)" \
             "$key" "$size" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ github.run_id }}" "$WORK/out/sources.json"
-          aws s3 cp /tmp/current.json "s3://$ZONE/official/current.json" --endpoint-url "$S3_ENDPOINT" \
+          aws s3 cp /tmp/current.json "s3://$ZONE/$PREFIX/current.json" --endpoint-url "$S3_ENDPOINT" \
             --content-type application/json --cache-control no-cache --no-progress
-          echo "- Uploaded \`$key\`, \`official/current.json\` updated" >> "$GITHUB_STEP_SUMMARY"
-          aws s3api list-objects-v2 --bucket "$ZONE" --prefix official/ --endpoint-url "$S3_ENDPOINT" \
+          echo "- Uploaded \`$key\`, \`$PREFIX/current.json\` updated" >> "$GITHUB_STEP_SUMMARY"
+          aws s3api list-objects-v2 --bucket "$ZONE" --prefix "$PREFIX/" --endpoint-url "$S3_ENDPOINT" \
             --query 'Contents[].Key' --output text | tr '\t' '\n' \
-            | grep -E '^official/[0-9]{8}/official\.pmtiles$' | sort | head -n -3 | while read -r old; do
+            | grep -E "$keep_re" | sort | head -n -3 | while read -r old; do
               [[ -z "$old" || "$old" == "$key" ]] && continue
               aws s3 rm "s3://$ZONE/$old" --endpoint-url "$S3_ENDPOINT"
               aws s3 rm "s3://$ZONE/${old%/official.pmtiles}/sources.json" --endpoint-url "$S3_ENDPOINT" || true

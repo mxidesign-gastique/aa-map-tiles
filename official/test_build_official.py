@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from datetime import date
 
-from build_official import build_meta, date_of, download_date
+from build_official import COVERAGE_KEYS, build_meta, coverage_feature, date_of, download_date
 
 
 class DownloadDateTest(unittest.TestCase):
@@ -35,6 +35,24 @@ class MetaTest(unittest.TestCase):
         meta = build_meta(set(), {"protected:lfu-bayern": 3, "protected:vorarlberg": 2}, {"protected:vorarlberg": "2019-01-01"})
         self.assertIsNone(meta["protected:lfu-bayern"]["updated"])
         self.assertEqual(meta["protected:vorarlberg"]["updated"], "2019-01-01")
+
+
+class CoverageTest(unittest.TestCase):
+    GEOMETRY = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
+
+    def test_every_source_has_the_same_attributes_and_types(self):
+        hint = coverage_feature(self.GEOMETRY, "lfu-bayern", "hint")["properties"]
+        plan = coverage_feature(self.GEOMETRY, "provinz-bozen", "plan", "Jenesien", approximate=True)["properties"]
+        for props in (hint, plan):
+            self.assertEqual(tuple(props), COVERAGE_KEYS)
+            self.assertIsInstance(props["approximate"], bool)
+            self.assertIsInstance(props["municipality"], str)
+        self.assertIs(hint["approximate"], False)
+        self.assertIs(plan["approximate"], True)
+
+    def test_approximate_never_carries_a_zone_id(self):
+        props = coverage_feature(self.GEOMETRY, "wlv-gzp", "plan", "X", approximate="lfu-bayern:ghk_sturz_o_wald:1018014")["properties"]
+        self.assertIs(props["approximate"], True)
 
 
 if __name__ == "__main__":

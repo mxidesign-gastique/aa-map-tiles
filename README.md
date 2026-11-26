@@ -68,7 +68,7 @@ rockfall, landslide, deep_landslide, slope_failure, sinkhole, subsidence, waterl
 Hazard zones are spatial planning, not the avalanche bulletin.
 
 Layer `hazard_coverage` (polygons): where a source has data; `source`, `zone_type`,
-`municipality`, `approximate` (true = convex hull of the zones of a municipality; LfU ships its
+`municipality`, `approximate` (always present, boolean; true = convex hull of the zones of a municipality; LfU ships its
 own overview). Outside coverage the app says it has no official zones, never that it is safe.
 
 Layer `route` (lines, the route schema of the `routes` set, so the same style applies): `type`

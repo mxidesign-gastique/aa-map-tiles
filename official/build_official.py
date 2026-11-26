@@ -249,6 +249,18 @@ def hull(coords: set[tuple[float, float]]) -> list[list[float]] | None:
     return [list(p) for p in ring + [ring[0]]] if len(ring) >= 3 else None
 
 
+COVERAGE_KEYS = ("source", "zone_type", "municipality", "approximate")
+
+
+def coverage_feature(geometry: dict, source: str, zone_type: str, municipality: str = "", approximate: bool = False) -> dict:
+    """One hazard_coverage Feature. Every feature carries the same four attributes with the same types,
+    so no feature is without `approximate` (true only for the convex hull of a municipality's zones;
+    LfU ships its own overview, false) and tippecanoe never has to reconcile unequal attribute sets
+    when it coalesces features of different sources."""
+    return {"type": "Feature", "geometry": geometry,
+            "properties": {"source": source, "zone_type": zone_type, "municipality": municipality, "approximate": bool(approximate)}}
+
+
 def build_meta(wanted: set[str], counts: dict[str, int], updated: dict[str, str]) -> dict[str, dict]:
     """The sources.json content. `updated` is the newest date the authority gave, else None: never the
     day of the build (the Bolzano service and several protected-area sources carry no date)."""
@@ -302,7 +314,7 @@ def main() -> None:
             with tempfile.TemporaryDirectory(dir=out) as work:
                 for index, (layer, record) in enumerate(lfu_layers(pathlib.Path(work), args.bbox)):
                     if layer.startswith("ghk_uebersicht"):
-                        coverage.write(json.dumps({"type": "Feature", "geometry": record["geometry"], "properties": {"source": "lfu-bayern", "zone_type": "hint"}}) + "\n")
+                        coverage.write(json.dumps(coverage_feature(record["geometry"], "lfu-bayern", "hint")) + "\n")
                     else:
                         write(map_lfu(record, layer, index))
 
@@ -338,8 +350,8 @@ def main() -> None:
         for (source, municipality), coords in by_municipality.items():
             ring = hull(coords)
             if ring:
-                props = {"source": source, "zone_type": "plan", "municipality": municipality, "approximate": True}
-                coverage.write(json.dumps({"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]}, "properties": props}, ensure_ascii=False) + "\n")
+                hull_polygon = {"type": "Polygon", "coordinates": [ring]}
+                coverage.write(json.dumps(coverage_feature(hull_polygon, source, "plan", municipality, approximate=True), ensure_ascii=False) + "\n")
 
     meta = build_meta(wanted, counts, updated)
     (out / "sources.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))

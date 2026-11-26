@@ -25,6 +25,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from datetime import date
+from email.utils import parsedate_to_datetime
 from collections import Counter, defaultdict
 from typing import Any, Iterator
 
@@ -140,12 +141,33 @@ def download(url: str, target: pathlib.Path) -> pathlib.Path:
         with urllib.request.urlopen(request, timeout=1800) as response, target.open("wb") as out:
             while chunk := response.read(1 << 20):
                 out.write(chunk)
+            data_date = date_of(response.headers.get("Last-Modified"))
+        if data_date:
+            target.with_name(target.name + ".date").write_text(data_date)
     return target
+
+
+def date_of(last_modified: str | None) -> str:
+    """An HTTP date (`Last-Modified`) as YYYY-MM-DD, '' when absent or unreadable."""
+    try:
+        return parsedate_to_datetime(last_modified).date().isoformat() if last_modified else ""
+    except (TypeError, ValueError):
+        return ""
+
+
+def download_date(target: pathlib.Path) -> str:
+    """The data date `download` noted for a file: its Last-Modified, else the day of the build."""
+    noted = target.with_name(target.name + ".date")
+    return noted.read_text().strip() if noted.exists() else date.today().isoformat()
+
+
+def bvv_archive(work: pathlib.Path) -> pathlib.Path:
+    return download(BVV_ZIP, work / "by_basisdlm_plus.zip")
 
 
 def bvv_features(work: pathlib.Path, bbox: str | None) -> Iterator[dict]:
     """The leisure trail axes of the Basis-DLM plus (1.75 GiB zip, one GeoPackage inside)."""
-    archive = download(BVV_ZIP, work / "by_basisdlm_plus.zip")
+    archive = bvv_archive(work)
     target = work / "bvv_trails.geojsonl"
     command = ["ogr2ogr", "-f", "GeoJSONSeq", str(target), f"/vsizip/{archive}/by_basisdlm_plus.gpkg", BVV_LAYER,
                "-t_srs", "EPSG:4326", "-lco", "COORDINATE_PRECISION=6", "-explodecollections"]
@@ -276,8 +298,10 @@ def main() -> None:
                         write(map_lfu(record, layer, index))
 
         if "bvv-freizeitwege" in wanted:
+            bvv_date = download_date(bvv_archive(work_dir))
+            updated["bvv-freizeitwege"] = bvv_date
             for feature in bvv_features(work_dir, args.bbox):
-                route = map_bvv(feature)
+                route = map_bvv(feature, bvv_date)
                 if route is None:
                     reason = unknown_reason(feature)
                     unknown_trails[reason or "(skipped: no trail type)"] += 1

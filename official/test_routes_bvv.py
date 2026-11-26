@@ -24,6 +24,10 @@ class BvvTest(unittest.TestCase):
         self.assertEqual((p["route_id"], p["source"], p["source_id"]), (4711, "bvv-freizeitwege", "4711"))
         self.assertEqual((p["surface"], p["traffic"]), ("unpaved", "low"))
         self.assertEqual(route["tippecanoe"], {"minzoom": 9})
+        self.assertEqual(p["source_date"], "")
+
+    def test_source_date_is_the_data_date_of_the_download(self):
+        self.assertEqual(map_bvv(trail(), "2026-11-23")["properties"]["source_date"], "2026-11-23")
 
     def test_local_and_mtb_trails_come_late(self):
         self.assertEqual(map_bvv(trail(FW_TYP="Örtlicher Wanderweg"))["properties"]["rank"], 4)

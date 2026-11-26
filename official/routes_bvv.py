@@ -8,7 +8,8 @@ spells them otherwise, after the data itself (FW_TYP "örtl. Wanderweg", "Mounta
 
 The fields follow the route schema of karte-wegenetze (README "routes"), so its style applies
 without a special case: `type`, `network`, `rank` (1-4), `name`, `ref`, `route_id` (integer,
-unique in the set), plus `source`, `source_id`, `surface`, `traffic`, `main_route`.
+unique in the set), plus `source`, `source_id`, `source_date`, `surface`, `traffic`, `main_route`.
+`source_date` is the data date of the download (YYYY-MM-DD), as the hazard zones carry it.
 The surface is data for the sheet, never a colour.
 """
 
@@ -76,7 +77,7 @@ def unknown_reason(feature: Feature) -> Optional[str]:
     return str(p.get("FW_TYP"))
 
 
-def map_bvv(feature: Feature) -> Optional[Feature]:
+def map_bvv(feature: Feature, source_date: str = "") -> Optional[Feature]:
     """One `L_53901_Freizeitwegachse_BY` feature -> route, or None for an unknown trail type."""
     p = feature.get("properties") or {}
     kind = TYPES.get(_key(p.get("FW_TYP")))
@@ -97,6 +98,7 @@ def map_bvv(feature: Feature) -> Optional[Feature]:
         "route_id": route_id_of(p.get("FW_ID")),
         "source": SOURCE,
         "source_id": str(p.get("FW_ID") or ""),
+        "source_date": source_date,
         "surface": SURFACE.get(_key(p.get("FOM_fzwOberflmaterial_BY")), "unknown"),
     }
     traffic = TRAFFIC.get(_key(p.get("FVA_fzwVerkaufkommen_BY")))

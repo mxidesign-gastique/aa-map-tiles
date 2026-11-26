@@ -3,7 +3,8 @@
 Source: object type `L_53901_Freizeitwegachse_BY` of `by_basisdlm_plus.gpkg`
 (https://geodaten.bayern.de/odd/m/2/basisdlm/plus/by_basisdlm_plus.zip, weekly, CC BY 4.0,
 "Bayerische Vermessungsverwaltung – www.geodaten.bayern.de"). Value lists after the data model
-(https://geodaten.bayern.de/odd/m/3/pdf/basisdlm_plus_datenmodell.pdf, pp. 57-59).
+(https://geodaten.bayern.de/odd/m/3/pdf/basisdlm_plus_datenmodell.pdf, pp. 57-59) and, where the data
+spells them otherwise, after the data itself (FW_TYP "örtl. Wanderweg", "Mountainbikeweg"; FW_BYNET "kein ...").
 
 The fields follow the route schema of karte-wegenetze (README "routes"), so its style applies
 without a special case: `type`, `network`, `rank` (1-4), `name`, `ref`, `route_id` (integer,
@@ -23,13 +24,20 @@ SOURCE = "bvv-freizeitwege"
 
 # FW_TYP -> (type, network, rank). The BVV has no national/international class; long trails are
 # "Wanderweg"/"Radweg" too, the Bayernnetz für Radler is the state network.
+# The data itself writes "örtl. Wanderweg" and "Mountainbikeweg" (GeoPackage and the QGIS project in the same zip,
+# read 26.11.2026: 654,612 and 62,554 axes); the data model's spellings are kept in case the export follows it.
 TYPES = {
+    "örtl. wanderweg": ("hiking", "local", 4),
     "örtlicher wanderweg": ("hiking", "local", 4),
     "wanderweg": ("hiking", "regional", 3),
     "radweg": ("cycling", "regional", 3),
+    "mountainbikeweg": ("mtb", "local", 4),
     "mountainbike": ("mtb", "local", 4),
     "moutainbike": ("mtb", "local", 4),  # spelling of the data model
 }
+# FW_TYP values left out on purpose, not counted as unknown: an axis without a trail type (its own empty
+# category in the BVV's QGIS project) cannot be drawn as hiking, cycling or MTB.
+SKIPPED: frozenset[str] = frozenset({""})
 SURFACE = {
     "bitumen, asphalt, beton": "paved",
     "kein bitumen, asphalt, beton": "unpaved",
@@ -54,6 +62,18 @@ def route_id_of(fw_id: Any) -> int:
     if re.fullmatch(r"\d{1,15}", text):
         return int(text)
     return zlib.crc32(text.encode("utf-8"))
+
+
+def unknown_reason(feature: Feature) -> Optional[str]:
+    """Why `map_bvv` gave None: the raw FW_TYP for a value the lists do not know, a marker for a missing
+    geometry, None for a type left out on purpose (`SKIPPED`). The build counts these per reason."""
+    p = feature.get("properties") or {}
+    key = _key(p.get("FW_TYP"))
+    if key in SKIPPED:
+        return None
+    if key in TYPES and not feature.get("geometry"):
+        return "(no geometry)"
+    return str(p.get("FW_TYP"))
 
 
 def map_bvv(feature: Feature) -> Optional[Feature]:

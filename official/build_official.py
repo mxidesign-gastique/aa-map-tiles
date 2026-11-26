@@ -25,12 +25,12 @@ import urllib.parse
 import urllib.request
 import zipfile
 from datetime import date
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Any, Iterator
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from hazard_zones import map_bz, map_lfu, map_wlv  # noqa: E402
-from routes_bvv import map_bvv  # noqa: E402
+from routes_bvv import map_bvv, unknown_reason  # noqa: E402
 import protected_areas  # noqa: E402
 
 AGENT = "all-active-tiles/1.0 (+https://all-active.net)"
@@ -245,7 +245,7 @@ def main() -> None:
 
     work_dir = pathlib.Path(args.work) if args.work else out / "work"
     work_dir.mkdir(parents=True, exist_ok=True)
-    unknown_trails = 0
+    unknown_trails: Counter[str] = Counter()
 
     with (out / "hazard_zone.geojsonl").open("w") as zones, (out / "hazard_coverage.geojsonl").open("w") as coverage, \
             (out / "route.geojsonl").open("w") as routes, (out / "protected_area.geojsonl").open("w") as protected, \
@@ -279,7 +279,8 @@ def main() -> None:
             for feature in bvv_features(work_dir, args.bbox):
                 route = map_bvv(feature)
                 if route is None:
-                    unknown_trails += 1
+                    reason = unknown_reason(feature)
+                    unknown_trails[reason or "(skipped: no trail type)"] += 1
                     continue
                 routes.write(json.dumps(route, ensure_ascii=False, separators=(",", ":")) + "\n")
                 counts["bvv-freizeitwege"] += 1
@@ -313,8 +314,13 @@ def main() -> None:
         meta[key] = {"count": counts[key], "updated": date.today().isoformat()}
     (out / "sources.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(json.dumps(meta, ensure_ascii=False, indent=2))
-    if counts.get("bvv-freizeitwege") and unknown_trails > counts["bvv-freizeitwege"] / 100:
-        raise SystemExit(f"{unknown_trails} BVV trails with an unknown FW_TYP: check the value list in routes_bvv.py")
+    skipped_trails = unknown_trails.pop("(skipped: no trail type)", 0)
+    if skipped_trails:
+        print(f"{skipped_trails} BVV axes without a trail type left out", file=sys.stderr)
+    unknown_total = sum(unknown_trails.values())
+    if counts.get("bvv-freizeitwege") and unknown_total > counts["bvv-freizeitwege"] / 100:
+        listed = ", ".join(f"{value!r}: {count}" for value, count in unknown_trails.most_common(20))
+        raise SystemExit(f"{unknown_total} BVV trails with an unknown FW_TYP ({listed}): check the value list in routes_bvv.py")
     if not any(counts.values()):
         raise SystemExit("no hazard zones written")
 

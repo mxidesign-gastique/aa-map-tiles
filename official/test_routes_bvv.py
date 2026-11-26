@@ -3,7 +3,7 @@ run checks the real values (build_official.py stops on more than 1 % unknown tra
 
 import unittest
 
-from routes_bvv import map_bvv, route_id_of
+from routes_bvv import map_bvv, route_id_of, unknown_reason
 
 LINE = {"type": "LineString", "coordinates": [[10.7, 47.56], [10.71, 47.57]]}
 
@@ -41,6 +41,19 @@ class BvvTest(unittest.TestCase):
     def test_unknown_surface_and_type(self):
         self.assertEqual(map_bvv(trail(FOM_fzwOberflmaterial_BY="Noch nicht bekannt"))["properties"]["surface"], "unknown")
         self.assertIsNone(map_bvv(trail(FW_TYP="Reitweg")))
+
+    def test_spellings_of_the_data(self):
+        # As the GeoPackage writes them (read 26.11.2026), next to the data model's.
+        local = map_bvv(trail(FW_TYP="örtl. Wanderweg", FW_BYNET="kein Bayernnetz für Radler"))["properties"]
+        self.assertEqual((local["type"], local["network"], local["rank"]), ("hiking", "local", 4))
+        self.assertNotIn("bayernnetz", local)
+        self.assertEqual(map_bvv(trail(FW_TYP="Mountainbikeweg"))["properties"]["type"], "mtb")
+
+    def test_unknown_reason_names_the_value(self):
+        self.assertEqual(unknown_reason(trail(FW_TYP="Reitweg")), "Reitweg")
+        self.assertIsNone(unknown_reason(trail(FW_TYP="")))
+        self.assertIsNone(unknown_reason(trail(FW_TYP=None)))
+        self.assertEqual(unknown_reason({"type": "Feature", "geometry": None, "properties": {"FW_TYP": "Radweg"}}), "(no geometry)")
 
     def test_route_id_is_an_integer(self):
         self.assertEqual(route_id_of("12345"), 12345)

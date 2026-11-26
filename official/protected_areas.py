@@ -32,6 +32,16 @@ LABEL_REFINEMENTS = 8
 
 # --- text helpers -------------------------------------------------------------------------------
 
+def authority_date(value, fallback=""):
+    """A date the authority gave: YYYY-MM-DD (also with a time) or a year; anything else -> `fallback`
+    (the caller passes '' - the day of the build is never a data date)."""
+    text = str(value).strip() if isinstance(value, (str, int)) else ""
+    match = re.match(r"(\d{4}-\d{2}-\d{2})(?:[T ]|$)", text)
+    if match:
+        return match.group(1)
+    return text if re.fullmatch(r"(1[89]|20)\d{2}", text) else fallback
+
+
 def trimmed(value):
     """A source value as stripped text; anything that is not a string is ''."""
     return value.strip() if isinstance(value, str) else ""
@@ -278,7 +288,8 @@ def map_bafu_jagdbann(feature, source_date=""):
     time = trimmed(properties.get("schutzzeit"))
     state, period = parse_protection_time(time)
     return _zone(
-        feature, id=f"bafu-jagdbann:{fid}", source=CREDIT_BAFU, source_date=source_date,
+        feature, id=f"bafu-jagdbann:{fid}", source=CREDIT_BAFU,
+        source_date=authority_date(properties.get("beschlussjahr"), source_date),  # year of the decision
         name=without_number(properties.get("jb_name")), kind="Jagdbanngebiet", zone_class=RULES,
         rule_text=_rule_text(properties), binding=_binding_of(properties.get("schutzs_de")),
         period=period if state == "period" else None, period_text="" if state == "all_year" else time,
@@ -339,7 +350,8 @@ def map_vorarlberg(feature, source_date=""):
         return None
     category = trimmed(properties.get("kategorie"))
     return _zone(
-        feature, id=f"vorarlberg:{uuid}", source=CREDIT_VORARLBERG, source_date=source_date,
+        feature, id=f"vorarlberg:{uuid}", source=CREDIT_VORARLBERG,
+        source_date=authority_date(properties.get("lgdat"), source_date),  # date of the ordinance
         name=trimmed(properties.get("name")), kind=capitalised(category),
         zone_class=RULES if category in VORARLBERG_RULE_CATEGORIES else PROTECTED, link=trimmed(properties.get("ris_link")),
     )

@@ -31,6 +31,11 @@ class MetaTest(unittest.TestCase):
         self.assertEqual(meta["provinz-bozen"]["count"], 5)
         self.assertEqual(meta["wlv-gzp"]["updated"], "2026-05-01")
 
+    def test_protected_source_without_a_date_has_none(self):
+        meta = build_meta(set(), {"protected:lfu-bayern": 3, "protected:vorarlberg": 2}, {"protected:vorarlberg": "2019-01-01"})
+        self.assertIsNone(meta["protected:lfu-bayern"]["updated"])
+        self.assertEqual(meta["protected:vorarlberg"]["updated"], "2019-01-01")
+
 
 if __name__ == "__main__":
     unittest.main()

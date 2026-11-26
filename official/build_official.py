@@ -318,17 +318,18 @@ def main() -> None:
                 routes.write(json.dumps(route, ensure_ascii=False, separators=(",", ":")) + "\n")
                 counts["bvv-freizeitwege"] += 1
 
-        today = date.today().isoformat()
         found: dict[str, list[dict]] = {}
         for source in [name for name in args.protected.split(",") if name]:
             mapper = protected_areas.SOURCES[source]
             for record, extra in protected_features(source, work_dir, args.bbox, found):
-                zone = mapper(record, **extra, source_date=today)
+                zone = mapper(record, **extra)  # source_date only from the record itself, never the build day
                 if not zone:
                     continue
                 props = zone["properties"]
                 protected.write(json.dumps(zone, ensure_ascii=False, separators=(",", ":")) + "\n")
                 counts[f"protected:{source}"] += 1
+                if props.get("source_date") and props["source_date"] > updated.get(f"protected:{source}", ""):
+                    updated[f"protected:{source}"] = props["source_date"]
                 point = protected_areas.label_point(zone)
                 if point and props.get("name"):
                     label = {"id": props["id"], "name": props["name"], "zone_class": props.get("zone_class", "")}

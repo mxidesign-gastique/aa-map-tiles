@@ -279,5 +279,26 @@ class LabelPointAndRegistry(unittest.TestCase):
         self.assertEqual(zone["properties"]["source_date"], "2026-11-25")
 
 
+class AuthorityDate(Base):
+    def test_vorarlberg_takes_the_ordinance_date_of_the_record(self):
+        zone = pa.map_vorarlberg(feature({"uuid": "u", "kategorie": "Naturpark", "lgdat": "1997-05-22"}))
+        self.assertEqual(zone["properties"]["source_date"], "1997-05-22")
+
+    def test_jagdbann_takes_the_year_of_the_decision(self):
+        zone = pa.map_bafu_jagdbann(feature({"jb_name": "A (Nr. 1.00)", "beschlussjahr": 1991}, fid=1))
+        self.assertEqual(zone["properties"]["source_date"], "1991")
+
+    def test_no_date_in_the_record_stays_empty(self):
+        for mapped in (pa.map_vorarlberg(feature({"uuid": "u", "kategorie": "Naturpark"})),
+                       pa.map_bafu_jagdbann(feature({"jb_name": "A"}, fid=1)),
+                       pa.map_lfu_bayern(feature({"GmlID": "naturpark.4", "name": "A"})),
+                       pa.map_bozen(feature({"OBJECTID": 1, "BEZ_D": "Naturpark", "NSO_DESC_DE": "X"}), type_key="parks")):
+            self.assertEqual(mapped["properties"]["source_date"], "")
+
+    def test_garbage_is_no_date(self):
+        for value in ("", None, "gestern", "99", "22.05.1997 x"):
+            self.assertEqual(pa.authority_date(value), "")
+
+
 if __name__ == "__main__":
     unittest.main()
